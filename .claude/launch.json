@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "flutter-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd flutter_app && flutter run -d web-server --web-port=5757"],
+      "port": 5757
+    },
+    {
+      "name": "flutter-web-api",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd flutter_app && flutter run -d web-server --web-port=5757 --dart-define=API_BASE_URL=http://127.0.0.1:8000"],
+      "port": 5757
+    }
+  ]
+}

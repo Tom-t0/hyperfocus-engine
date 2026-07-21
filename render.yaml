@@ -1,0 +1,29 @@
+# Render（無料枠）用のワンクリック・デプロイ設定（Blueprint）。
+# GitHubにこのリポジトリを置き、Renderで "New +" → "Blueprint" から取り込むと、
+# Webサービスと無料PostgreSQLが自動作成される。
+#
+# 注意: Renderの無料DBは約30日で期限切れになる。長く使うなら Neon など外部の
+# 無料Postgresに DATABASE_URL を差し替えるか、有料プランに上げる（DEPLOY.md参照）。
+services:
+  - type: web
+    name: deadline-api
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt && python manage.py migrate"
+    startCommand: "gunicorn config.wsgi --bind 0.0.0.0:$PORT --workers 2"
+    envVars:
+      - key: DJANGO_SECRET_KEY
+        generateValue: true      # Renderが安全なランダム値を自動生成
+      - key: DJANGO_DEBUG
+        value: "0"
+      - key: DJANGO_SECURE
+        value: "1"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: deadline-db
+          property: connectionString
+    # ALLOWED_HOSTS は RENDER_EXTERNAL_HOSTNAME から自動許可（settings.py）
+
+databases:
+  - name: deadline-db
+    plan: free

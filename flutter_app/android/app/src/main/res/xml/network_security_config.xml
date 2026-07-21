@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  本番は暗号化通信(HTTPS)のみ許可する。
+  平文HTTPは開発時のローカルホストのみ例外的に許可（Androidエミュレータの
+  10.0.2.2 と localhost）。実機でLAN内のHTTPサーバに繋いで開発する場合は、
+  そのPCのローカルIPを <domain> に一時追加すること。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

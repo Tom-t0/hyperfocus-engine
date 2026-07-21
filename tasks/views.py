@@ -1,0 +1,200 @@
+"""
+Flutterフロント向けのシンプルなJSON API。
+
+- GET  /api/tasks/            : 今日のタイルスタック（レベル順・進行中は各レベル最上部）
+- POST /api/tasks/            : タスク作成
+- POST /api/tasks/<id>/complete/  : ワンタップ完了
+- POST /api/tasks/<id>/progress/  : 部分完了（実績数値入力）
+- GET  /api/tasks/<id>/triage/    : トリアージ状態
+- POST /api/tasks/<id>/triage/    : トリアージ選択の適用
+- POST /api/reset/extend/         : 徹夜時の更新時間延長（上限=翌日正午）
+- POST /api/reset/run/            : 次回更新日時の超過チェック＆日次処理
+"""
+import json
+from datetime import date, datetime, time
+
+from django.http import JsonResponse
+from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+
+from .models import Level, Task, TaskStatus, UserProfile
+from .progress import ProgressLog
+from . import services
+
+
+def _profile(request) -> UserProfile:
+    profile, _ = UserProfile.objects.get_or_create(
+        user=request.user,
+        defaults={"next_reset_at": UserProfile.default_next_reset(timezone.now())},
+    )
+    return profile
+
+
+def _get_task(request, task_id: int) -> Task | None:
+    """本人のタスクを取得。無ければ None（呼び出し側で404を返す）。"""
+    return Task.objects.filter(id=task_id, user=request.user).first()
+
+
+def _not_found() -> JsonResponse:
+    return JsonResponse({"error": "タスクが見つかりません"}, status=404)
+
+
+def _task_payload(task: Task, today: date) -> dict:
+    triage = services.evaluate_triage(task, today)
+    today_done = ProgressLog.objects.filter(
+        task=task, logical_date=today
+    ).aggregate_total()
+    quota = task.today_quota(today)
+    return {
+        "id": task.id,
+        "title": task.title,
+        "level": task.level,
+        "status": task.status,
+        "unit": task.unit,
+        "today_quota": quota,
+        "today_done": today_done,
+        "today_remaining": max(quota - today_done, 0),
+        "remaining_amount": task.remaining_amount,
+        "actual_deadline": task.actual_deadline.isoformat() if task.actual_deadline else None,
+        "target_deadline": task.target_deadline.isoformat() if task.target_deadline else None,
+        "margin_days": task.margin_days,
+        "rest_days_remaining": task.rest_days_remaining,
+        "projected_completion": (
+            task.projected_completion.isoformat() if task.projected_completion else None
+        ),
+        "in_progress_today": 0 < today_done < quota,
+        "triage": {
+            "active": triage.active,
+            "quota": triage.quota,
+            "standard": triage.standard,
+            "final_stage": triage.final_stage,
+            "options": [
+                {"key": o.key, "label": o.label, "enabled": o.enabled}
+                for o in triage.options
+            ],
+        },
+    }
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def task_list(request):
+    profile = _profile(request)
+    today = profile.logical_today(timezone.now())
+
+    if request.method == "POST":
+        body = json.loads(request.body)
+        task = Task(
+            user=request.user,
+            title=body["title"],
+            level=body["level"],
+            unit=body.get("unit", "ページ"),
+            total_amount=int(body["total_amount"]),
+            margin_days=int(body.get("margin_days", 0)),
+            work_days_per_week=int(body.get("work_days_per_week", 7)),
+            fixed_daily_amount=body.get("fixed_daily_amount"),
+        )
+        if body.get("actual_deadline"):
+            task.actual_deadline = date.fromisoformat(body["actual_deadline"])
+        task.initialize_pace(today)
+        task.save()
+        return JsonResponse(_task_payload(task, today), status=201)
+
+    # タイルスタック: レベルA→D。進行中（部分完了あり）は各レベルの最上部（§3）
+    tasks = [
+        _task_payload(t, today)
+        for t in request.user.tasks.exclude(
+            status__in=[TaskStatus.ARCHIVED, TaskStatus.DONE]
+        )
+    ]
+    tasks.sort(key=lambda p: (p["level"], not p["in_progress_today"]))
+    return JsonResponse({"today": today.isoformat(), "tasks": tasks})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def complete(request, task_id: int):
+    profile = _profile(request)
+    today = profile.logical_today(timezone.now())
+    task = _get_task(request, task_id)
+    if task is None:
+        return _not_found()
+    services.complete_today(task, today)
+    return JsonResponse(_task_payload(task, today))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def uncomplete(request, task_id: int):
+    profile = _profile(request)
+    today = profile.logical_today(timezone.now())
+    task = _get_task(request, task_id)
+    if task is None:
+        return _not_found()
+    services.uncomplete_today(task, today)
+    return JsonResponse(_task_payload(task, today))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def progress(request, task_id: int):
+    profile = _profile(request)
+    today = profile.logical_today(timezone.now())
+    task = _get_task(request, task_id)
+    if task is None:
+        return _not_found()
+    body = json.loads(request.body)
+    services.record_progress(task, int(body["amount"]), today)
+    return JsonResponse(_task_payload(task, today))
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def triage(request, task_id: int):
+    profile = _profile(request)
+    today = profile.logical_today(timezone.now())
+    task = _get_task(request, task_id)
+    if task is None:
+        return _not_found()
+
+    if request.method == "POST":
+        body = json.loads(request.body)
+        try:
+            services.apply_triage_choice(
+                task,
+                body["choice"],
+                today,
+                new_deadline=(
+                    date.fromisoformat(body["new_deadline"])
+                    if body.get("new_deadline")
+                    else None
+                ),
+                friction_text=body.get("friction_text"),
+            )
+        except ValueError as e:
+            return JsonResponse({"error": str(e)}, status=400)
+
+    return JsonResponse(_task_payload(task, today))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def extend_reset(request):
+    """徹夜対応: 更新時間を延長する。上限は翌日の正午（§4-1）。"""
+    profile = _profile(request)
+    body = json.loads(request.body)
+    h, m = map(int, body["until"].split(":"))
+    new_dt = profile.extend_reset(time(h, m), timezone.now())
+    return JsonResponse({"next_reset_at": new_dt.isoformat()})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def run_reset(request):
+    """次回更新日時を超過していれば、休日の自動消費と翌日分の再計算を行う。"""
+    profile = _profile(request)
+    notices = services.run_daily_reset(profile)
+    return JsonResponse(
+        {"next_reset_at": profile.next_reset_at.isoformat(), "notices": notices}
+    )

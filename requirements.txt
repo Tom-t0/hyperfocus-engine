@@ -1,0 +1,8 @@
+Django>=5.2,<6.0
+gunicorn>=21.2
+# Web版フロント（別オリジン）からのAPI利用に必要
+django-cors-headers>=4.3
+# PaaSの DATABASE_URL を解釈する
+dj-database-url>=2.1
+# PostgreSQL接続ドライバ（Django 5.x推奨のpsycopg3。SQLite開発環境では不要）
+psycopg[binary]>=3.1

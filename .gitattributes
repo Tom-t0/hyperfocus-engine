@@ -1,0 +1,9 @@
+# Linuxサーバーで動くため、テキストはLFに正規化する（Procfile等の改行崩れ防止）
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.apk binary
+*.keystore binary
+*.jar binary
