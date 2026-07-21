@@ -16,3 +16,7 @@
 *.bin binary
 *.data binary
 *.symbols binary
+
+# webapp/ は flutter build web の生成物。GitHubの言語統計・差分から除外する
+# （実際に書いたコードは Python(Django) と Dart(Flutter)）
+webapp/** linguist-generated=true
