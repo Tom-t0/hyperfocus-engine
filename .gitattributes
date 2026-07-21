@@ -7,3 +7,12 @@
 *.apk binary
 *.keystore binary
 *.jar binary
+# Flutter Web のビルド生成物（バイナリ）
+*.wasm binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.bin binary
+*.data binary
+*.symbols binary

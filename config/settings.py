@@ -51,13 +51,22 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    # CORSはCommonMiddlewareより前に置く必要がある（Web版フロント用）
+    # Flutter Web（ビルド済み）を同一オリジンで配信する（SecurityMiddleware直後）
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    # CORSはCommonMiddlewareより前に置く必要がある（別オリジン配信する場合用）
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     # トークン認証（/api/ はログイン必須。/api/auth/ は除外）
     "tasks.middleware.TokenAuthMiddleware",
 ]
+
+# --- Flutter Web の同一オリジン配信 --------------------------------------
+# webapp/ にビルド済みFlutter Webを置き、サイトのルート（/）で配信する。
+# /api/ はDjangoが処理し、それ以外の静的ファイル（index.html等）はwhitenoiseが返す。
+STATIC_URL = "static/"
+WHITENOISE_ROOT = BASE_DIR / "webapp"
+WHITENOISE_INDEX_FILE = True
 
 X_FRAME_OPTIONS = "DENY"
 

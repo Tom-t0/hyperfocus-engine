@@ -1,5 +1,7 @@
 Django>=5.2,<6.0
 gunicorn>=21.2
+# Flutter Web（ビルド済み）を同一オリジンで配信する
+whitenoise>=6.6
 # Web版フロント（別オリジン）からのAPI利用に必要
 django-cors-headers>=4.3
 # PaaSの DATABASE_URL を解釈する
