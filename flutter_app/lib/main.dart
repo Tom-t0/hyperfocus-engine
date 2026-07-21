@@ -257,7 +257,7 @@ class QuotaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '過集中デッドライン',
+      title: 'タスクタイル',
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
       home: const RootScreen(),
     );
@@ -379,7 +379,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       size: 56,
                       color: Theme.of(context).colorScheme.primary),
                   const SizedBox(height: 12),
-                  Text('過集中デッドライン',
+                  Text('タスクタイル',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.headlineSmall),
                   const SizedBox(height: 32),
