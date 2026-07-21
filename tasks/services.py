@@ -83,8 +83,16 @@ def evaluate_triage(task: Task, today: date) -> TriageState:
     if task.remaining_amount == 0 or task.initial_daily_quota <= 0:
         return TriageState(active=False)
 
-    quota = task.today_quota(today)
-    if quota <= task.initial_daily_quota * TRIAGE_THRESHOLD:
+    quota = task.today_quota(today)  # 表示用（切り上げ済み）
+    # 判定は切り上げ前の「生のペース」で行う。切り上げによる僅かな増分で
+    # 作成直後（ノルマが小数のとき）に誤発動するのを防ぐ（バグ修正）。
+    wd = task.working_days_left(today)
+    raw_pace = task.remaining_amount / wd if wd > 0 else float(task.remaining_amount)
+    if raw_pace <= task.initial_daily_quota * TRIAGE_THRESHOLD:
+        return TriageState(active=False)
+
+    # 「強行突破」で当日を承知済みなら、その日は再表示しない（§6）
+    if task.triage_ack_date == today:
         return TriageState(active=False)
 
     options = [
@@ -133,7 +141,8 @@ def apply_triage_choice(
         task.rest_days_remaining = 0  # 休日の権利を消滅させ稼働日を増やす
 
     elif choice == "force_through":
-        pass  # 警告を無視。状態変更なし（今日だけ過集中で捌く）
+        # 警告を無視して過集中で捌く。当日はもう再表示しない（§6）
+        task.triage_ack_date = today
 
     elif choice == "reset_deadline_with_friction":
         # レベルA: 「関係者と合意済み」の入力を意図的な決断コストとする（§6-2）

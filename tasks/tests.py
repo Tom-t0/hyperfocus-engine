@@ -152,6 +152,36 @@ class TriageTests(TestCase):
         self.assertIn("archive", keys)
         self.assertTrue(state.final_stage)
 
+    def test_no_triage_on_creation_with_fractional_quota(self):
+        # 生ペース 6/5=1.2/日 → 表示は切り上げ2。旧実装は 2 > 1.2*1.5=1.8 で
+        # 作成直後に誤発動していた（バグ）。作成日はノルマ＝標準なので出ないのが正。
+        task = make_task(
+            self.user,
+            level=Level.B,
+            total_amount=6,
+            actual_deadline=TODAY + timedelta(days=4),
+            margin_days=0,
+            work_days_per_week=7,
+        )
+        self.assertEqual(task.today_quota(TODAY), 2)  # 表示は切り上げの2
+        self.assertFalse(services.evaluate_triage(task, TODAY).active)
+
+    def test_force_through_suppresses_triage_for_that_day(self):
+        task = make_task(self.user)  # 標準10問/日
+        late = TODAY + timedelta(days=6)
+        task.rest_days_remaining = 0
+        task.save()
+        # サボって1.5倍超 → 発動
+        self.assertTrue(services.evaluate_triage(task, late).active)
+        # 強行突破 → 同じ日は再表示されない
+        services.apply_triage_choice(task, "force_through", late)
+        self.assertEqual(task.triage_ack_date, late)
+        self.assertFalse(services.evaluate_triage(task, late).active)
+        # 翌日は再び発動（承知は当日限り）
+        self.assertTrue(
+            services.evaluate_triage(task, late + timedelta(days=1)).active
+        )
+
 
 class DailyResetTests(TestCase):
     def setUp(self):

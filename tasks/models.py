@@ -146,6 +146,9 @@ class Task(models.Model):
     # レベルC: システムが勝手に後ろへ延ばす「完了予定日」（§5）
     projected_completion = models.DateField(null=True, blank=True)
 
+    # 「強行突破」で承知した論理日。その日はトリアージを再表示しない（§6）
+    triage_ack_date = models.DateField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
