@@ -101,15 +101,30 @@ def task_list(request):
         task.save()
         return JsonResponse(_task_payload(task, today), status=201)
 
+    # 表示対象日。?date=YYYY-MM-DD で昨日/明日などを閲覧できる（既定は今日）。
+    view_date = today
+    date_str = request.GET.get("date")
+    if date_str:
+        try:
+            view_date = date.fromisoformat(date_str)
+        except ValueError:
+            view_date = today
+
     # タイルスタック: レベルA→D。進行中（部分完了あり）は各レベルの最上部（§3）
     tasks = [
-        _task_payload(t, today)
+        _task_payload(t, view_date)
         for t in request.user.tasks.exclude(
             status__in=[TaskStatus.ARCHIVED, TaskStatus.DONE]
         )
     ]
     tasks.sort(key=lambda p: (p["level"], not p["in_progress_today"]))
-    return JsonResponse({"today": today.isoformat(), "tasks": tasks})
+    return JsonResponse(
+        {
+            "today": today.isoformat(),
+            "view_date": view_date.isoformat(),
+            "tasks": tasks,
+        }
+    )
 
 
 @csrf_exempt

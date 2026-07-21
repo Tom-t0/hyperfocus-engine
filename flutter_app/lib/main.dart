@@ -75,6 +75,17 @@ class TriageState {
             .toList();
 }
 
+DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+String ymd(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+/// タスク一覧の取得結果（タスク群 ＋ アプリ上の「今日」）
+class TaskListResult {
+  final List<TaskTile> tasks;
+  final DateTime today;
+  TaskListResult(this.tasks, this.today);
+}
+
 // ---------------------------------------------------------------------------
 // APIクライアント（Django接続。baseUrlを空にするとモックで動作）
 // ---------------------------------------------------------------------------
@@ -177,11 +188,17 @@ class ApiClient {
 
   // ---- タスク --------------------------------------------------------
 
-  Future<List<TaskTile>> fetchTasks() async {
-    if (isMock) return _MockData.tasks();
-    final r = await http.get(Uri.parse('$baseUrl/api/tasks/'), headers: _headers);
+  Future<TaskListResult> fetchTasks({DateTime? date}) async {
+    if (isMock) {
+      return TaskListResult(_MockData.tasks(), dateOnly(DateTime.now()));
+    }
+    final q = date != null ? '?date=${ymd(date)}' : '';
+    final r = await http.get(Uri.parse('$baseUrl/api/tasks/$q'), headers: _headers);
     final body = _decode(r);
-    return (body['tasks'] as List).map((j) => TaskTile.fromJson(j)).toList();
+    final tasks =
+        (body['tasks'] as List).map((j) => TaskTile.fromJson(j)).toList();
+    final today = DateTime.parse(body['today'] as String);
+    return TaskListResult(tasks, today);
   }
 
   Future<void> completeToday(int id) async {
@@ -476,6 +493,20 @@ class _TileStackScreenState extends State<TileStackScreen> {
   List<TaskTile> tiles = [];
   bool loading = true;
   String? loadError;
+  DateTime? selectedDate; // 表示中の日付（nullなら今日）
+  DateTime? todayDate; // アプリ上の論理的な「今日」（サーバーから取得）
+  bool showCompleted = false; // 全完了時に完了済みを表示するか
+
+  bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  bool get isToday =>
+      selectedDate == null ||
+      (todayDate != null && _sameDay(selectedDate!, todayDate!));
+
+  bool get allDone =>
+      tiles.isEmpty ||
+      tiles.every((t) => t.todayRemaining == 0 && t.status != 'zombie');
 
   @override
   void initState() {
@@ -512,9 +543,9 @@ class _TileStackScreenState extends State<TileStackScreen> {
 
   Future<void> _load() async {
     await api.runResetCheck();
-    final List<TaskTile> t;
+    final TaskListResult res;
     try {
-      t = await api.fetchTasks();
+      res = await api.fetchTasks(date: selectedDate);
     } on UnauthorizedException {
       // トークン失効: ログイン画面へ戻す
       await api.logout();
@@ -528,16 +559,56 @@ class _TileStackScreenState extends State<TileStackScreen> {
       return;
     }
     setState(() {
-      tiles = t;
+      tiles = res.tasks;
+      todayDate = res.today;
+      selectedDate ??= res.today; // 初回は今日を選択日にする
+      showCompleted = false;
       loading = false;
       loadError = null;
     });
-    // トリアージ発動中のタスクがあれば強制オーバーレイ（§6-1）
-    final urgent = t.where((x) => x.triage.active).toList();
-    if (urgent.isNotEmpty && mounted) {
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _showTriageOverlay(urgent.first));
+    // 今日を見ているときだけ、トリアージ発動中を強制オーバーレイ（§6-1）
+    if (isToday) {
+      final urgent = res.tasks.where((x) => x.triage.active).toList();
+      if (urgent.isNotEmpty && mounted) {
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _showTriageOverlay(urgent.first));
+      }
     }
+  }
+
+  // ---- 日付ナビゲーション ----------------------------------------------
+
+  void _shiftDay(int delta) {
+    final base = selectedDate ?? todayDate ?? DateTime.now();
+    setState(() {
+      selectedDate = dateOnly(base).add(Duration(days: delta));
+      showCompleted = false;
+    });
+    _load();
+  }
+
+  void _backToToday() {
+    setState(() {
+      selectedDate = todayDate;
+      showCompleted = false;
+    });
+    _load();
+  }
+
+  String _dateLabel(DateTime d) {
+    const wd = ['月', '火', '水', '木', '金', '土', '日'];
+    String rel = '';
+    if (todayDate != null) {
+      final diff = dateOnly(d).difference(dateOnly(todayDate!)).inDays;
+      if (diff == 0) {
+        rel = '・今日';
+      } else if (diff == -1) {
+        rel = '・昨日';
+      } else if (diff == 1) {
+        rel = '・明日';
+      }
+    }
+    return '${d.year}年${d.month}月${d.day}日（${wd[d.weekday - 1]}）$rel';
   }
 
   // ---- §4-1 深夜ポップアップ ------------------------------------------
@@ -570,6 +641,8 @@ class _TileStackScreenState extends State<TileStackScreen> {
       context: context,
       initialTime: const TimeOfDay(hour: 6, minute: 0),
       helpText: '延長できるのは翌日の正午（12:00）まで',
+      // アナログ時計を使わずデジタル入力のみにする
+      initialEntryMode: TimePickerEntryMode.inputOnly,
     );
     if (picked == null) return;
     // 上限はバックエンドでも強制されるが、UI側でも丸める（§4-1）
@@ -737,7 +810,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('今日のタスク'),
+        title: const Text('タスクタイル'),
         actions: [
           if (!ApiClient.isMock)
             IconButton(
@@ -749,8 +822,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
             ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        tooltip: 'タスクを追加',
+      floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
           final created = await Navigator.push<bool>(
             context,
@@ -758,7 +830,8 @@ class _TileStackScreenState extends State<TileStackScreen> {
           );
           if (created == true) _load();
         },
-        child: const Icon(Icons.add),
+        icon: const Icon(Icons.add),
+        label: const Text('タスクを追加'),
       ),
       // §4-1 常時バナー: 作業途中の延長に対応
       bottomNavigationBar: Material(
@@ -799,17 +872,99 @@ class _TileStackScreenState extends State<TileStackScreen> {
                     ],
                   ),
                 )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(12),
-                    children: [
-                      for (final level in ['A', 'B', 'C', 'D'])
-                        ..._levelSection(level),
-                    ],
+              : Column(
+                  children: [
+                    _dateBar(),
+                    Expanded(
+                      child: (allDone && !showCompleted)
+                          ? _emptyState()
+                          : RefreshIndicator(
+                              onRefresh: _load,
+                              child: ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                padding: const EdgeInsets.all(12),
+                                children: [
+                                  for (final level in ['A', 'B', 'C', 'D'])
+                                    ..._levelSection(level),
+                                ],
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+    );
+  }
+
+  // 画面上部の日付バー（矢印で前後の日へ移動）
+  Widget _dateBar() {
+    final d = selectedDate ?? todayDate ?? DateTime.now();
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Column(
+        children: [
+          Row(
+            children: [
+              IconButton(
+                tooltip: '前の日',
+                icon: const Icon(Icons.chevron_left),
+                onPressed: () => _shiftDay(-1),
+              ),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    _dateLabel(d),
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
+              ),
+              IconButton(
+                tooltip: '次の日',
+                icon: const Icon(Icons.chevron_right),
+                onPressed: () => _shiftDay(1),
+              ),
+            ],
+          ),
+          if (!isToday)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: TextButton.icon(
+                onPressed: _backToToday,
+                icon: const Icon(Icons.today, size: 16),
+                label: const Text('今日に戻る（他の日は閲覧のみ）'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // 全タスク完了時／タスクが無いときの表示
+  Widget _emptyState() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.check_circle_outline, size: 56, color: Colors.green),
+          const SizedBox(height: 12),
+          Text(
+            isToday ? '今日のタスクはありません' : 'この日のタスクはありません',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          if (isToday) ...[
+            const SizedBox(height: 4),
+            Text('おつかれさまでした',
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
+          if (tiles.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () => setState(() => showCompleted = true),
+              child: const Text('完了したタスクを表示'),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -829,17 +984,20 @@ class _TileStackScreenState extends State<TileStackScreen> {
           ),
         ]),
       ),
-      ...group.map(_tile),
+      ...group.map((t) => _tile(t, isToday)),
     ];
   }
 
-  Widget _tile(TaskTile t) {
+  Widget _tile(TaskTile t, bool interactive) {
     final isZombie = t.status == 'zombie';
     final done = t.todayRemaining == 0 && !isZombie;
     return Card(
       child: ListTile(
-        onTap: done ? () => _confirmUncomplete(t) : () => _oneTapComplete(t),
-        onLongPress: () => _longPressMenu(t),
+        enabled: interactive, // 今日以外は閲覧のみ（グレー表示）
+        onTap: !interactive
+            ? null
+            : (done ? () => _confirmUncomplete(t) : () => _oneTapComplete(t)),
+        onLongPress: interactive ? () => _longPressMenu(t) : null,
         leading: Icon(
           done ? Icons.check_circle : Icons.radio_button_unchecked,
           color: done ? Colors.green : levelColors[t.level],
@@ -850,14 +1008,14 @@ class _TileStackScreenState extends State<TileStackScreen> {
               // 罪悪感を煽らない無機質な事実表示（§6-2）
               ? 'ℹ️ 逆算停止：期日を超過。残 ${t.remainingAmount}${t.unit} を消化してください'
               : t.inProgressToday
-                  ? '今日の残りノルマ：${t.todayRemaining}${t.unit}'
-                  : '今日のノルマ：${t.todayQuota}${t.unit}',
+                  ? '残りノルマ：${t.todayRemaining}${t.unit}'
+                  : 'ノルマ：${t.todayQuota}${t.unit}',
         ),
         trailing: t.triage.active
             ? IconButton(
                 icon: const Icon(Icons.warning_amber_rounded,
                     color: Colors.orange),
-                onPressed: () => _showTriageOverlay(t),
+                onPressed: interactive ? () => _showTriageOverlay(t) : null,
               )
             : null,
       ),

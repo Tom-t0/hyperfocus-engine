@@ -10,7 +10,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // AppBar
-    expect(find.text('今日のタスク'), findsOneWidget);
+    expect(find.text('タスクタイル'), findsOneWidget);
 
     // モックのレベルBタスクはトリアージ発動中 → 強制オーバーレイが出る（§6-1）
     expect(find.text('このままでは破綻します'), findsOneWidget);
@@ -110,9 +110,33 @@ void main() {
     await tester.tap(saveBtn);
     await tester.pumpAndSettle();
 
-    // 一覧に戻り、新タスクがレベルDに表示される
+    // 一覧に戻り、新タスクがレベルD（最下部）に表示される。
+    // 遅延ビルドのListViewなのでスクロールして確認する。
+    await tester.scrollUntilVisible(
+      find.text('積読消化'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('積読消化'), findsOneWidget);
-    expect(find.text('今日のノルマ：15ページ'), findsOneWidget);
+    expect(find.text('ノルマ：15ページ'), findsOneWidget);
+  });
+
+  testWidgets('日付ナビ: 翌日に移動すると閲覧のみ表示', (WidgetTester tester) async {
+    await tester.pumpWidget(const QuotaApp());
+    await tester.pumpAndSettle();
+    await dismissTriage(tester);
+
+    // 次の日へ
+    await tester.tap(find.byIcon(Icons.chevron_right));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('明日'), findsOneWidget);
+    expect(find.text('今日に戻る（他の日は閲覧のみ）'), findsOneWidget);
+
+    // 今日に戻る
+    await tester.tap(find.text('今日に戻る（他の日は閲覧のみ）'));
+    await tester.pumpAndSettle();
+    expect(find.text('今日に戻る（他の日は閲覧のみ）'), findsNothing);
   });
 
   // スマホ幅でRenderFlexオーバーフローが起きないこと
@@ -134,7 +158,7 @@ void main() {
         // 強行突破後はトリアージが解除され、オーバーレイが再表示されないこと
         expect(find.text('このままでは破綻します'), findsNothing);
       }
-      expect(find.text('今日のタスク'), findsOneWidget);
+      expect(find.text('タスクタイル'), findsOneWidget);
     });
   }
 }
