@@ -40,6 +40,13 @@ def _not_found() -> JsonResponse:
     return JsonResponse({"error": "タスクが見つかりません"}, status=404)
 
 
+def _effective_start(task: Task) -> date:
+    """タスクの開始日（追加した論理日）。未設定の旧タスクは作成日時から補完。"""
+    if task.start_date:
+        return task.start_date
+    return timezone.localtime(task.created_at).date()
+
+
 def _task_payload(task: Task, today: date) -> dict:
     triage = services.evaluate_triage(task, today)
     today_done = ProgressLog.objects.filter(
@@ -98,6 +105,7 @@ def task_list(request):
         if body.get("actual_deadline"):
             task.actual_deadline = date.fromisoformat(body["actual_deadline"])
         task.initialize_pace(today)
+        task.start_date = today  # 追加した論理日。これより前の日付では非表示
         task.save()
         return JsonResponse(_task_payload(task, today), status=201)
 
@@ -111,11 +119,13 @@ def task_list(request):
             view_date = today
 
     # タイルスタック: レベルA→D。進行中（部分完了あり）は各レベルの最上部（§3）
+    # 追加した日より前の日付では、そのタスクは表示しない。
     tasks = [
         _task_payload(t, view_date)
         for t in request.user.tasks.exclude(
             status__in=[TaskStatus.ARCHIVED, TaskStatus.DONE]
         )
+        if _effective_start(t) <= view_date
     ]
     tasks.sort(key=lambda p: (p["level"], not p["in_progress_today"]))
     return JsonResponse(

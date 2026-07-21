@@ -366,6 +366,39 @@ class AuthApiTests(TestCase):
         r = self.client.post("/api/tasks/999/complete/", **self._auth(token))
         self.assertEqual(r.status_code, 404)
 
+    def test_task_hidden_on_dates_before_it_was_added(self):
+        auth = self._auth(self._register("henry").json()["token"])
+        created = self.client.post(
+            "/api/tasks/",
+            data=json.dumps(
+                {"title": "今日追加", "level": "B", "total_amount": 50,
+                 "actual_deadline": "2026-12-31"}
+            ),
+            content_type="application/json",
+            **auth,
+        )
+        self.assertEqual(created.status_code, 201)
+
+        today = self.client.get("/api/tasks/", **auth).json()["today"]
+        yesterday = (
+            date.fromisoformat(today) - timedelta(days=1)
+        ).isoformat()
+        tomorrow = (
+            date.fromisoformat(today) + timedelta(days=1)
+        ).isoformat()
+
+        # 追加日（今日）と、それ以降（明日）は表示される
+        self.assertEqual(len(self.client.get("/api/tasks/", **auth).json()["tasks"]), 1)
+        self.assertEqual(
+            len(self.client.get(f"/api/tasks/?date={tomorrow}", **auth).json()["tasks"]),
+            1,
+        )
+        # 追加日より前（昨日）は表示されない
+        self.assertEqual(
+            len(self.client.get(f"/api/tasks/?date={yesterday}", **auth).json()["tasks"]),
+            0,
+        )
+
 
 class UncompleteTests(TestCase):
     """完了の取り消し（タイル再タップ → 未完了へ戻す）"""

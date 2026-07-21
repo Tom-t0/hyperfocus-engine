@@ -149,6 +149,9 @@ class Task(models.Model):
     # 「強行突破」で承知した論理日。その日はトリアージを再表示しない（§6）
     triage_ack_date = models.DateField(null=True, blank=True)
 
+    # タスクを追加した論理日。これより前の日付では一覧に表示しない
+    start_date = models.DateField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
