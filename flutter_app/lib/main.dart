@@ -468,11 +468,92 @@ class _LoginScreenState extends State<LoginScreen> {
                         ? 'アカウントをお持ちの方はログイン'
                         : '新規登録はこちら'),
                   ),
+                  const Divider(height: 24),
+                  TextButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const GuideScreen()),
+                    ),
+                    icon: const Icon(Icons.help_outline, size: 18),
+                    label: const Text('はじめての方へ・使い方を見る'),
+                  ),
                 ],
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 使い方案内（ログイン前でも見られる）
+// ---------------------------------------------------------------------------
+
+class GuideScreen extends StatelessWidget {
+  const GuideScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget h(String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(0, 20, 0, 6),
+          child: Text(text,
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(color: theme.colorScheme.primary)),
+        );
+    Widget p(String text) => Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Text(text, style: theme.textTheme.bodyMedium),
+        );
+    Widget bullet(String text) => Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('・'),
+              Expanded(child: Text(text, style: theme.textTheme.bodyMedium)),
+            ],
+          ),
+        );
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('使い方')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+        children: [
+          h('タスクタイルとは'),
+          p('「全体の量」と「期日」を登録すると、今日やるべき量（ノルマ）を'
+              'アプリが自動で計算します。「今日どれだけやるか」を考えず、'
+              '提示されたタスクを上から順にこなしていくだけ、を目指したアプリです。'),
+          h('使い方（4ステップ）'),
+          bullet('① アカウントを作成してログインします。'),
+          bullet('② 右下の「＋ タスクを追加」で、やること・全体量・期日・'
+              '重要度レベルを登録します。'),
+          bullet('③ 毎日、各タスクに表示される「今日のノルマ」をこなします。'),
+          bullet('④ 終わったらタイルをタップして完了。少しだけ進めた日は、'
+              'タイルを長押しして実績（やった量）を入力します。'),
+          h('重要度レベル（A〜D）'),
+          bullet('A（Must）: 絶対に落とせない期日。仕事や提出物など。'),
+          bullet('B（Should）: 自分で決めた期日。資格勉強など。'),
+          bullet('C（Want）: 趣味・自己満。いつ終わってもよいもの。'),
+          bullet('D（Routine）: 終わりのない毎日の習慣。固定量を毎日提示。'),
+          h('便利な機能'),
+          bullet('各タイルの右端に、期日までの残り日数が出ます。'),
+          bullet('画面上部の日付の矢印で、前後の日のノルマを確認できます'
+              '（今日以外は閲覧のみ）。'),
+          bullet('ペースが乱れて1日のノルマが増えすぎると警告が出て、'
+              '立て直し方（マージン消費・強行突破など）を選べます。'),
+          h('ヒント'),
+          p('まずは小さなタスクを1つ登録して、毎日こなす感覚をつかんでみて'
+              'ください。'),
+          const SizedBox(height: 24),
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ログイン画面に戻る'),
+          ),
+        ],
       ),
     );
   }

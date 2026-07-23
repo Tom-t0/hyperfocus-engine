@@ -54,6 +54,30 @@ void main() {
     expect(find.text('ユーザー名を入力してください'), findsOneWidget);
   });
 
+  testWidgets('ログイン前に使い方案内を開ける', (WidgetTester tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: LoginScreen(onSuccess: () {}),
+    ));
+    await tester.pumpAndSettle();
+
+    final guideBtn = find.text('はじめての方へ・使い方を見る');
+    await tester.ensureVisible(guideBtn);
+    await tester.tap(guideBtn);
+    await tester.pumpAndSettle();
+
+    // ガイド画面が開く
+    expect(find.text('タスクタイルとは'), findsOneWidget);
+    expect(find.text('使い方（4ステップ）'), findsOneWidget);
+
+    // 戻れる
+    final backBtn = find.text('ログイン画面に戻る');
+    await tester.scrollUntilVisible(backBtn, 200,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(backBtn);
+    await tester.pumpAndSettle();
+    expect(find.text('はじめての方へ・使い方を見る'), findsOneWidget);
+  });
+
   // トリアージオーバーレイが出ていれば「強行突破」で閉じる
   Future<void> dismissTriage(WidgetTester tester) async {
     final f = find.text('強行突破');
