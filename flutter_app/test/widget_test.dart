@@ -28,9 +28,24 @@ void main() {
 
     // マージンのあるタスクは「目標期日まであと ◯日」を表示
     expect(find.textContaining('目標期日まであと'), findsWidgets);
-    // 目標期日を過ぎたが実際の期日まで猶予があるタスクの表示
+    // 目標期日を過ぎたが実際の期日まで猶予がある（マージン期間）→ 実際の期日を表示
     expect(find.text('目標期日を超過中'), findsOneWidget);
-    expect(find.textContaining('期日まであと'), findsWidgets);
+    expect(find.textContaining('実際の期日まで'), findsOneWidget);
+  });
+
+  testWidgets('ホーム画面から使い方案内を開ける', (WidgetTester tester) async {
+    await tester.pumpWidget(const QuotaApp());
+    await tester.pumpAndSettle();
+    // 初期のトリアージオーバーレイを閉じる
+    final ft = find.text('強行突破');
+    if (ft.evaluate().isNotEmpty) {
+      await tester.tap(ft);
+      await tester.pumpAndSettle();
+    }
+
+    await tester.tap(find.byIcon(Icons.help_outline));
+    await tester.pumpAndSettle();
+    expect(find.text('タスクタイルとは'), findsOneWidget);
   });
 
   testWidgets('ログイン画面: 登録モードに切り替えできる', (WidgetTester tester) async {

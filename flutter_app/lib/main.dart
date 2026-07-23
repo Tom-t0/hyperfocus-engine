@@ -903,6 +903,14 @@ class _TileStackScreenState extends State<TileStackScreen> {
       appBar: AppBar(
         title: const Text('タスクタイル'),
         actions: [
+          IconButton(
+            tooltip: '使い方',
+            icon: const Icon(Icons.help_outline),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const GuideScreen()),
+            ),
+          ),
           if (!ApiClient.isMock)
             IconButton(
               tooltip: ApiClient.username == null
@@ -1106,13 +1114,14 @@ class _TileStackScreenState extends State<TileStackScreen> {
         daysText = '$dTarget日';
         color = scheme.onSurfaceVariant;
       } else if (dActual > 0) {
-        // 目標期日は過ぎたが、実際の期日まではまだ猶予がある
+        // 目標期日は過ぎたが、実際の期日まではまだ猶予がある（マージン期間）
+        // → 実際の期日を基準に表示する
         label = '目標期日を超過中';
-        daysText = '期日まであと$dActual日';
+        daysText = '実際の期日まで$dActual日';
         color = Colors.orange.shade800;
       } else if (dActual == 0) {
         label = '目標期日を超過中';
-        daysText = '期日は今日まで';
+        daysText = '実際の期日は今日';
         color = scheme.error;
       } else {
         label = '期日超過';
