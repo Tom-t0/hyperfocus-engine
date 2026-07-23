@@ -26,9 +26,9 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    // マージンのあるタスク（レベルA/B）は「目標」ラベル、残日数「あと◯日」を表示
-    expect(find.text('目標'), findsWidgets);
-    expect(find.textContaining('あと'), findsWidgets);
+    // マージンのあるタスク（レベルA/B）は「目標期日まであと ◯日」を表示
+    expect(find.textContaining('目標期日まであと'), findsWidgets);
+    expect(find.textContaining('日'), findsWidgets);
   });
 
   testWidgets('ログイン画面: 登録モードに切り替えできる', (WidgetTester tester) async {

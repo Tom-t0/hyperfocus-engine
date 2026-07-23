@@ -41861,32 +41861,35 @@ r=t.p
 r=A.c([new A.aM(B.GP,A.dk(A.c([p,B.Rh,A.dg(A.bo("\u30ec\u30d9\u30eb"+a+"\uff08"+A.k(o)+"\uff09",q,B.ap,q,A.G(s).ok.as,q,q,q),1)],r),B.O,B.z,B.Y,0,q),q)],r)
 B.b.T(r,new A.ag(n,new A.arw(this),A.Z(n).h("ag<1,e>")))
 return r},
-a73(a){var s,r,q,p,o,n,m,l=this,k=null,j=a.z,i=j==null
-if(i)j=a.y
-if(j==null)return k
-s=l.x
+a73(a){var s,r,q,p,o,n,m,l,k=this,j=null,i=a.z,h=i==null
+if(h)i=a.y
+if(i==null)return j
+s=k.x
 if(s==null)s=new A.cy(Date.now(),0,!1)
-r=B.e.e1(A.bT(A.aW(j),A.b9(j),A.bY(j)).f0(A.bT(A.aW(s),A.b9(s),A.bY(s))).a,864e8)
-q=!i&&a.Q>0?"\u76ee\u6a19":"\u671f\u65e5"
-i=l.c
-i.toString
-p=A.G(i).ax
-if(r>0){o="\u3042\u3068"+r+"\u65e5"
-n=p.rx
-if(n==null)n=p.k3}else if(r===0){o="\u4eca\u65e5\u307e\u3067"
-n=B.nK}else{o=""+-r+"\u65e5\u8d85\u904e"
-n=p.fy}i=l.c
-i.toString
-i=A.G(i).ok.Q
-if(i==null)i=k
-else{m=p.ry
-if(m==null){m=p.p
-if(m==null)m=p.k3}m=i.bf(m)
-i=m}i=A.bo(q,k,k,k,i,k,k,k)
-m=l.c
-m.toString
-m=A.G(m).ok.as
-return A.cS(A.c([i,A.bo(o,k,k,k,m==null?k:m.bf(n),k,k,k)],t.p),B.dG,B.z,B.ak,0,B.P)},
+r=B.e.e1(A.bT(A.aW(i),A.b9(i),A.bY(i)).f0(A.bT(A.aW(s),A.b9(s),A.bY(s))).a,864e8)
+q=!h&&a.Q>0
+h=k.c
+h.toString
+p=A.G(h).ax
+if(r>0){o=q?"\u76ee\u6a19\u671f\u65e5\u307e\u3067\u3042\u3068":"\u671f\u65e5\u307e\u3067\u3042\u3068"
+n=""+r+"\u65e5"
+m=p.rx
+if(m==null)m=p.k3}else if(r===0){o=q?"\u76ee\u6a19\u671f\u65e5":"\u671f\u65e5"
+n="\u4eca\u65e5\u307e\u3067"
+m=B.nK}else{o=q?"\u76ee\u6a19\u671f\u65e5":"\u671f\u65e5"
+n=""+-r+"\u65e5\u8d85\u904e"
+m=p.fy}h=k.c
+h.toString
+h=A.G(h).ok.Q
+if(h==null)h=j
+else{l=p.ry
+if(l==null){l=p.p
+if(l==null)l=p.k3}l=h.bf(l)
+h=l}h=A.bo(o,j,j,j,h,j,j,j)
+l=k.c
+l.toString
+l=A.G(l).ok.as
+return A.cS(A.c([h,A.bo(n,j,j,j,l==null?j:l.bf(m),j,j,j)],t.p),B.dG,B.z,B.ak,0,B.P)},
 aiJ(a,b){var s,r,q,p,o,n,m=this,l=null,k=a.d==="zombie",j=a.r,i=j===0&&!k,h=m.a73(a)
 if(!b)s=l
 else s=i?new A.arL(m,a):new A.arM(m,a)

@@ -1010,17 +1010,20 @@ class _TileStackScreenState extends State<TileStackScreen> {
     final days = dateOnly(deadline).difference(dateOnly(ref)).inDays;
     // 目標期日（マージンあり）か、実際の期日のみか
     final usingTarget = t.targetDeadline != null && t.marginDays > 0;
-    final label = usingTarget ? '目標' : '期日';
     final scheme = Theme.of(context).colorScheme;
+    final String label;
     final String daysText;
     final Color color;
     if (days > 0) {
-      daysText = 'あと$days日';
+      label = usingTarget ? '目標期日まであと' : '期日まであと';
+      daysText = '$days日';
       color = scheme.onSurfaceVariant;
     } else if (days == 0) {
+      label = usingTarget ? '目標期日' : '期日';
       daysText = '今日まで';
       color = Colors.orange.shade800;
     } else {
+      label = usingTarget ? '目標期日' : '期日';
       daysText = '${-days}日超過';
       color = scheme.error;
     }
