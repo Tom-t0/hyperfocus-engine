@@ -876,7 +876,10 @@ class _TileStackScreenState extends State<TileStackScreen> {
                   children: [
                     _dateBar(),
                     Expanded(
-                      child: (allDone && !showCompleted)
+                      // 「今日のタスクはありません」の空表示は今日だけ。
+                      // 今日以外は完了済みも含めて全タスクを表示する。
+                      child: (tiles.isEmpty ||
+                              (isToday && allDone && !showCompleted))
                           ? _emptyState()
                           : RefreshIndicator(
                               onRefresh: _load,
