@@ -1006,7 +1006,8 @@ class _TileStackScreenState extends State<TileStackScreen> {
   Widget? _deadlineBadge(TaskTile t) {
     final deadline = t.targetDeadline ?? t.actualDeadline;
     if (deadline == null) return null;
-    final ref = todayDate ?? DateTime.now();
+    // 残り日数は「表示中の日付」を基準にする（未来を見れば連動して短くなる）
+    final ref = selectedDate ?? todayDate ?? DateTime.now();
     final days = dateOnly(deadline).difference(dateOnly(ref)).inDays;
     // 目標期日（マージンあり）か、実際の期日のみか
     final usingTarget = t.targetDeadline != null && t.marginDays > 0;
