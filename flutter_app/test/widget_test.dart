@@ -46,6 +46,12 @@ void main() {
     await tester.tap(find.byIcon(Icons.help_outline));
     await tester.pumpAndSettle();
     expect(find.text('タスクタイルとは'), findsOneWidget);
+    // ホームから開いたときは戻るボタンが「ホーム画面に戻る」
+    final back = find.text('ホーム画面に戻る');
+    await tester.scrollUntilVisible(back, 200,
+        scrollable: find.byType(Scrollable).first);
+    expect(back, findsOneWidget);
+    expect(find.text('ログイン画面に戻る'), findsNothing);
   });
 
   testWidgets('ログイン画面: 登録モードに切り替えできる', (WidgetTester tester) async {

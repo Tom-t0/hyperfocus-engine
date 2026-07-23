@@ -492,7 +492,8 @@ class _LoginScreenState extends State<LoginScreen> {
 // ---------------------------------------------------------------------------
 
 class GuideScreen extends StatelessWidget {
-  const GuideScreen({super.key});
+  final String backLabel; // 戻るボタンの文言（開いた画面に応じて変える）
+  const GuideScreen({super.key, this.backLabel = 'ログイン画面に戻る'});
 
   @override
   Widget build(BuildContext context) {
@@ -551,7 +552,7 @@ class GuideScreen extends StatelessWidget {
           const SizedBox(height: 24),
           FilledButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('ログイン画面に戻る'),
+            child: Text(backLabel),
           ),
         ],
       ),
@@ -908,7 +909,8 @@ class _TileStackScreenState extends State<TileStackScreen> {
             icon: const Icon(Icons.help_outline),
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const GuideScreen()),
+              MaterialPageRoute(
+                  builder: (_) => const GuideScreen(backLabel: 'ホーム画面に戻る')),
             ),
           ),
           if (!ApiClient.isMock)
