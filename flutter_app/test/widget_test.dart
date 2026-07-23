@@ -16,6 +16,21 @@ void main() {
     expect(find.text('このままでは破綻します'), findsOneWidget);
   });
 
+  testWidgets('タイルに期日までの日数が表示される', (WidgetTester tester) async {
+    await tester.pumpWidget(const QuotaApp());
+    await tester.pumpAndSettle();
+    // トリアージオーバーレイを閉じる（モックのレベルBが発動中）
+    final ft = find.text('強行突破');
+    if (ft.evaluate().isNotEmpty) {
+      await tester.tap(ft);
+      await tester.pumpAndSettle();
+    }
+
+    // マージンのあるタスク（レベルA/B）は「目標」ラベル、残日数「あと◯日」を表示
+    expect(find.text('目標'), findsWidgets);
+    expect(find.textContaining('あと'), findsWidgets);
+  });
+
   testWidgets('ログイン画面: 登録モードに切り替えできる', (WidgetTester tester) async {
     await tester.pumpWidget(MaterialApp(
       home: LoginScreen(onSuccess: () {}),

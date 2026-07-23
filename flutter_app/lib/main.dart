@@ -34,6 +34,9 @@ class TaskTile {
   final int todayRemaining;
   final int remainingAmount;
   final bool inProgressToday;
+  final DateTime? actualDeadline; // 実際の期日（レベルDはnull）
+  final DateTime? targetDeadline; // 目標期日 ＝ 実際の期日 − マージン
+  final int marginDays;
   final TriageState triage;
 
   TaskTile.fromJson(Map<String, dynamic> j)
@@ -46,6 +49,9 @@ class TaskTile {
         todayRemaining = j['today_remaining'],
         remainingAmount = j['remaining_amount'],
         inProgressToday = j['in_progress_today'] ?? false,
+        actualDeadline = parseDate(j['actual_deadline']),
+        targetDeadline = parseDate(j['target_deadline']),
+        marginDays = j['margin_days'] ?? 0,
         triage = TriageState.fromJson(j['triage']);
 }
 
@@ -78,6 +84,10 @@ class TriageState {
 DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 String ymd(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+DateTime? parseDate(dynamic v) =>
+    (v == null) ? null : DateTime.parse(v as String);
+// モックデモ用: 今日からn日後のISO日付
+String isoFromNow(int days) => ymd(DateTime.now().add(Duration(days: days)));
 
 /// タスク一覧の取得結果（タスク群 ＋ アプリ上の「今日」）
 class TaskListResult {
@@ -991,9 +1001,51 @@ class _TileStackScreenState extends State<TileStackScreen> {
     ];
   }
 
+  // タイル右端の「期日まであと何日」バッジ。
+  // 目標期日があればそこまで、無ければ実際の期日まで。レベルD等は表示しない。
+  Widget? _deadlineBadge(TaskTile t) {
+    final deadline = t.targetDeadline ?? t.actualDeadline;
+    if (deadline == null) return null;
+    final ref = todayDate ?? DateTime.now();
+    final days = dateOnly(deadline).difference(dateOnly(ref)).inDays;
+    // 目標期日（マージンあり）か、実際の期日のみか
+    final usingTarget = t.targetDeadline != null && t.marginDays > 0;
+    final label = usingTarget ? '目標' : '期日';
+    final scheme = Theme.of(context).colorScheme;
+    final String daysText;
+    final Color color;
+    if (days > 0) {
+      daysText = 'あと$days日';
+      color = scheme.onSurfaceVariant;
+    } else if (days == 0) {
+      daysText = '今日まで';
+      color = Colors.orange.shade800;
+    } else {
+      daysText = '${-days}日超過';
+      color = scheme.error;
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(label,
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: scheme.outline)),
+        Text(daysText,
+            style: Theme.of(context)
+                .textTheme
+                .labelLarge
+                ?.copyWith(color: color)),
+      ],
+    );
+  }
+
   Widget _tile(TaskTile t, bool interactive) {
     final isZombie = t.status == 'zombie';
     final done = t.todayRemaining == 0 && !isZombie;
+    final badge = _deadlineBadge(t);
     return Card(
       child: ListTile(
         enabled: interactive, // 今日以外は閲覧のみ（グレー表示）
@@ -1014,11 +1066,19 @@ class _TileStackScreenState extends State<TileStackScreen> {
                   ? '残りノルマ：${t.todayRemaining}${t.unit}'
                   : 'ノルマ：${t.todayQuota}${t.unit}',
         ),
-        trailing: t.triage.active
-            ? IconButton(
-                icon: const Icon(Icons.warning_amber_rounded,
-                    color: Colors.orange),
-                onPressed: interactive ? () => _showTriageOverlay(t) : null,
+        trailing: (badge != null || t.triage.active)
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ?badge,
+                  if (t.triage.active)
+                    IconButton(
+                      icon: const Icon(Icons.warning_amber_rounded,
+                          color: Colors.orange),
+                      onPressed:
+                          interactive ? () => _showTriageOverlay(t) : null,
+                    ),
+                ],
               )
             : null,
       ),
@@ -1261,6 +1321,9 @@ class _MockData {
       'today_done': 0,
       'today_remaining': 8,
       'remaining_amount': 40,
+      'actual_deadline': isoFromNow(15),
+      'target_deadline': isoFromNow(12),
+      'margin_days': 3,
       'in_progress_today': false,
       'triage': {'active': false},
     },
@@ -1274,6 +1337,9 @@ class _MockData {
       'today_done': 0,
       'today_remaining': 25,
       'remaining_amount': 100,
+      'actual_deadline': isoFromNow(30),
+      'target_deadline': isoFromNow(28),
+      'margin_days': 2,
       'in_progress_today': false,
       'triage': {
         'active': true,
@@ -1297,6 +1363,9 @@ class _MockData {
       'today_done': 0,
       'today_remaining': 5,
       'remaining_amount': 120,
+      'actual_deadline': isoFromNow(160),
+      'target_deadline': isoFromNow(160),
+      'margin_days': 0,
       'in_progress_today': false,
       'triage': {'active': false},
     },
@@ -1337,13 +1406,18 @@ class _MockData {
     final level = body['level'] as String;
     final total = body['total_amount'] as int;
     int quota;
+    String? actualIso;
+    String? targetIso;
+    int marginDays = 0;
     if (level == 'D') {
       quota = body['fixed_daily_amount'] as int;
     } else {
       final deadline = DateTime.parse(body['actual_deadline'] as String);
-      final margin = body['margin_days'] as int;
+      marginDays = body['margin_days'] as int;
       final workDays = body['work_days_per_week'] as int;
-      final target = deadline.subtract(Duration(days: margin));
+      final target = deadline.subtract(Duration(days: marginDays));
+      actualIso = body['actual_deadline'] as String;
+      targetIso = ymd(target);
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
       final cal = target.difference(today).inDays + 1;
@@ -1364,6 +1438,9 @@ class _MockData {
       'today_done': 0,
       'today_remaining': quota,
       'remaining_amount': level == 'D' ? quota : total,
+      'actual_deadline': actualIso,
+      'target_deadline': targetIso,
+      'margin_days': marginDays,
       'in_progress_today': false,
       'triage': {'active': false},
     });
