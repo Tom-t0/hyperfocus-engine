@@ -1004,29 +1004,55 @@ class _TileStackScreenState extends State<TileStackScreen> {
   // タイル右端の「期日まであと何日」バッジ。
   // 目標期日があればそこまで、無ければ実際の期日まで。レベルD等は表示しない。
   Widget? _deadlineBadge(TaskTile t) {
-    final deadline = t.targetDeadline ?? t.actualDeadline;
-    if (deadline == null) return null;
+    final target = t.targetDeadline;
+    final actual = t.actualDeadline;
+    if (target == null && actual == null) return null;
     // 残り日数は「表示中の日付」を基準にする（未来を見れば連動して短くなる）
-    final ref = selectedDate ?? todayDate ?? DateTime.now();
-    final days = dateOnly(deadline).difference(dateOnly(ref)).inDays;
-    // 目標期日（マージンあり）か、実際の期日のみか
-    final usingTarget = t.targetDeadline != null && t.marginDays > 0;
+    final ref = dateOnly(selectedDate ?? todayDate ?? DateTime.now());
+    int daysTo(DateTime d) => dateOnly(d).difference(ref).inDays;
+
+    final hasMargin = target != null && actual != null && t.marginDays > 0;
     final scheme = Theme.of(context).colorScheme;
     final String label;
     final String daysText;
     final Color color;
-    if (days > 0) {
-      label = usingTarget ? '目標期日まであと' : '期日まであと';
-      daysText = '$days日';
-      color = scheme.onSurfaceVariant;
-    } else if (days == 0) {
-      label = usingTarget ? '目標期日' : '期日';
-      daysText = '今日まで';
-      color = Colors.orange.shade800;
+
+    if (hasMargin) {
+      final dTarget = daysTo(target);
+      final dActual = daysTo(actual);
+      if (dTarget > 0) {
+        label = '目標期日まであと';
+        daysText = '$dTarget日';
+        color = scheme.onSurfaceVariant;
+      } else if (dActual > 0) {
+        // 目標期日は過ぎたが、実際の期日まではまだ猶予がある
+        label = '目標期日を超過中';
+        daysText = '期日まであと$dActual日';
+        color = Colors.orange.shade800;
+      } else if (dActual == 0) {
+        label = '目標期日を超過中';
+        daysText = '期日は今日まで';
+        color = scheme.error;
+      } else {
+        label = '期日超過';
+        daysText = '${-dActual}日超過';
+        color = scheme.error;
+      }
     } else {
-      label = usingTarget ? '目標期日' : '期日';
-      daysText = '${-days}日超過';
-      color = scheme.error;
+      final d = daysTo((actual ?? target)!);
+      if (d > 0) {
+        label = '期日まであと';
+        daysText = '$d日';
+        color = scheme.onSurfaceVariant;
+      } else if (d == 0) {
+        label = '期日';
+        daysText = '今日まで';
+        color = Colors.orange.shade800;
+      } else {
+        label = '期日';
+        daysText = '${-d}日超過';
+        color = scheme.error;
+      }
     }
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -1325,9 +1351,10 @@ class _MockData {
       'today_done': 0,
       'today_remaining': 8,
       'remaining_amount': 40,
-      'actual_deadline': isoFromNow(15),
-      'target_deadline': isoFromNow(12),
-      'margin_days': 3,
+      // 目標期日は過ぎたが実際の期日まではまだ猶予がある状態のデモ
+      'actual_deadline': isoFromNow(5),
+      'target_deadline': isoFromNow(-2),
+      'margin_days': 7,
       'in_progress_today': false,
       'triage': {'active': false},
     },

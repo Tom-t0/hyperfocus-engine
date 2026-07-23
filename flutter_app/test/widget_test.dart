@@ -26,9 +26,11 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    // マージンのあるタスク（レベルA/B）は「目標期日まであと ◯日」を表示
+    // マージンのあるタスクは「目標期日まであと ◯日」を表示
     expect(find.textContaining('目標期日まであと'), findsWidgets);
-    expect(find.textContaining('日'), findsWidgets);
+    // 目標期日を過ぎたが実際の期日まで猶予があるタスクの表示
+    expect(find.text('目標期日を超過中'), findsOneWidget);
+    expect(find.textContaining('期日まであと'), findsWidgets);
   });
 
   testWidgets('ログイン画面: 登録モードに切り替えできる', (WidgetTester tester) async {
