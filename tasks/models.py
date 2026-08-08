@@ -72,13 +72,24 @@ class UserProfile(models.Model):
 
     # ---- 日次リセット境界の計算 ----------------------------------------
 
+    @staticmethod
+    def local_at(day: date, at: time) -> datetime:
+        """指定日の指定時刻を「ローカル時間（TIME_ZONE）」のaware datetimeで返す。
+
+        DBの値はUTCで返るため、日付境界の計算は必ずローカル時間に直してから
+        行う（UTCのまま .date() を取ると日付が1日ずれる）。
+        """
+        return timezone.make_aware(datetime.combine(day, at))
+
     @classmethod
     def default_next_reset(cls, now: datetime) -> datetime:
-        """now 以降で最初に訪れる「午前4時」を返す。"""
-        tz = now.tzinfo
-        candidate = datetime.combine(now.date(), cls.DEFAULT_BOUNDARY, tzinfo=tz)
-        if candidate <= now:
-            candidate += timedelta(days=1)
+        """now 以降で最初に訪れる「午前4時（ローカル時間）」を返す。"""
+        local = timezone.localtime(now)
+        candidate = cls.local_at(local.date(), cls.DEFAULT_BOUNDARY)
+        if candidate <= local:
+            candidate = cls.local_at(
+                local.date() + timedelta(days=1), cls.DEFAULT_BOUNDARY
+            )
         return candidate
 
     def should_offer_extension(self, now: datetime) -> bool:
@@ -93,9 +104,9 @@ class UserProfile(models.Model):
         """
         if new_time > self.EXTENSION_LIMIT:
             new_time = self.EXTENSION_LIMIT  # 日付の概念の崩壊を防ぐ（§4-1）
-        tz = now.tzinfo
-        candidate = datetime.combine(now.date(), new_time, tzinfo=tz)
-        if candidate <= now:
+        local = timezone.localtime(now)
+        candidate = self.local_at(local.date(), new_time)
+        if candidate <= local:
             # 既に過ぎた時刻を指定された場合はデフォルトに戻す
             candidate = self.default_next_reset(now)
         self.next_reset_at = candidate
@@ -107,10 +118,11 @@ class UserProfile(models.Model):
 
         例: 深夜2時（リセットは当日4時）→ 論理日付は前日。
         """
-        boundary = self.next_reset_at
-        if now < boundary:
+        boundary = timezone.localtime(self.next_reset_at)
+        local_now = timezone.localtime(now)
+        if local_now < boundary:
             return (boundary - timedelta(days=1)).date()
-        return now.date()
+        return local_now.date()
 
 
 class Task(models.Model):

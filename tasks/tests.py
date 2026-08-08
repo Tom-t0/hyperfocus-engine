@@ -233,6 +233,103 @@ class DailyResetTests(TestCase):
         self.assertTrue(any("完了予定日" in n for n in notices))
 
 
+class CatchUpTests(TestCase):
+    """数日アプリを開かなかった場合の日次リセット（溜まった日数をまとめて精算）"""
+
+    def setUp(self):
+        self.user = User.objects.create(username="u")
+        self.profile = UserProfile.objects.create(
+            user=self.user,
+            next_reset_at=datetime.combine(
+                TODAY + timedelta(days=1), time(4, 0), tzinfo=TZ
+            ),
+        )
+
+    def _run_at(self, days: int, at=time(4, 1)):
+        return services.run_daily_reset(
+            self.profile,
+            now=datetime.combine(TODAY + timedelta(days=days), at, tzinfo=TZ),
+        )
+
+    def test_missed_days_each_consume_a_rest_day(self):
+        # 3日開かない → 終わった論理日は TODAY / +1 / +2 の3日分
+        task = make_task(self.user, work_days_per_week=5)
+        task.rest_days_remaining = 5
+        task.save()
+        self._run_at(3)
+        task.refresh_from_db()
+        self.assertEqual(task.rest_days_remaining, 2)  # 5 - 3
+
+    def test_days_with_progress_are_not_charged(self):
+        task = make_task(self.user, work_days_per_week=5)
+        task.rest_days_remaining = 5
+        task.save()
+        services.record_progress(task, 1, TODAY + timedelta(days=1))  # その日は進めた
+        self._run_at(3)
+        task.refresh_from_db()
+        self.assertEqual(task.rest_days_remaining, 3)  # 5 - 2（進捗ありの日は消費なし）
+
+    def test_next_reset_lands_on_the_upcoming_4am(self):
+        self._run_at(3, at=time(9, 0))
+        self.profile.refresh_from_db()
+        nxt = timezone.localtime(self.profile.next_reset_at)
+        self.assertEqual(nxt.date(), TODAY + timedelta(days=4))
+        self.assertEqual(nxt.time(), time(4, 0))
+
+    def test_same_notice_is_not_repeated_per_missed_day(self):
+        # レベルCは毎日「完了予定日を延ばしました」を出しうるが、まとめて1件にする
+        make_task(self.user, level=Level.C, margin_days=0)
+        notices = self._run_at(3)
+        self.assertEqual(len([n for n in notices if "完了予定日" in n]), 1)
+
+    def test_rest_days_never_go_negative(self):
+        task = make_task(self.user, work_days_per_week=5)
+        task.rest_days_remaining = 1
+        task.save()
+        self._run_at(10)  # 10日放置しても0で止まる
+        task.refresh_from_db()
+        self.assertEqual(task.rest_days_remaining, 0)
+
+
+class TimezoneBoundaryTests(TestCase):
+    """日付境界はローカル時間（Asia/Tokyo）基準。DBはUTCで返るためズレやすい。"""
+
+    def setUp(self):
+        self.user = User.objects.create(username="u")
+
+    def test_logical_today_is_local_after_db_roundtrip(self):
+        UserProfile.objects.create(
+            user=self.user,
+            next_reset_at=datetime(2026, 8, 9, 4, 0, tzinfo=TZ),
+        )
+        p = UserProfile.objects.get(user=self.user)  # DBからはUTCで返る
+        # 境界(8/9 4:00)前は、JSTの時刻に関わらず論理日は 8/8
+        for hh in (0, 7, 12, 23):
+            self.assertEqual(
+                p.logical_today(datetime(2026, 8, 8, hh, 0, tzinfo=TZ)),
+                date(2026, 8, 8),
+                msg=f"JST {hh}時",
+            )
+        self.assertEqual(
+            p.logical_today(datetime(2026, 8, 9, 3, 59, tzinfo=TZ)), date(2026, 8, 8)
+        )
+        self.assertEqual(
+            p.logical_today(datetime(2026, 8, 9, 4, 30, tzinfo=TZ)), date(2026, 8, 9)
+        )
+
+    def test_default_next_reset_is_4am_local_not_utc(self):
+        # 夕方 → 翌日の4時（JST）
+        nxt = timezone.localtime(
+            UserProfile.default_next_reset(datetime(2026, 8, 8, 16, 0, tzinfo=TZ))
+        )
+        self.assertEqual((nxt.date(), nxt.time()), (date(2026, 8, 9), time(4, 0)))
+        # 深夜2時 → その日の4時（JST）
+        nxt2 = timezone.localtime(
+            UserProfile.default_next_reset(datetime(2026, 8, 8, 2, 0, tzinfo=TZ))
+        )
+        self.assertEqual((nxt2.date(), nxt2.time()), (date(2026, 8, 8), time(4, 0)))
+
+
 class NightOwlTests(TestCase):
     def setUp(self):
         self.user = User.objects.create(username="u")

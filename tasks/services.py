@@ -12,6 +12,7 @@ from .models import Level, Task, TaskStatus, UserProfile
 from .progress import ProgressLog  # 分離した実績ログ
 
 TRIAGE_THRESHOLD = 1.5  # 標準ペースの1.5倍でトリアージ発動（§6-1）
+MAX_CATCHUP_DAYS = 400  # 日次リセットをまとめて精算する上限（暴走防止）
 
 
 # ---------------------------------------------------------------------------
@@ -187,17 +188,48 @@ def run_daily_reset(profile: UserProfile, now=None) -> list[str]:
     """ユーザーごとの「次回更新日時」を超過していたら日次処理を実行する。
 
     全ユーザー一斉バッチではなく、per-user監視で呼び出される想定（§4-1）。
+    アプリを数日開かなかった場合は、溜まっている日数ぶんをまとめて精算する
+    （1日分しか処理しないと休日の権利が減らず逆算の前提が狂うため）。
     戻り値は静かな通知メッセージのリスト。
     """
     now = now or timezone.now()
-    notices: list[str] = []
     if now < profile.next_reset_at:
-        return notices  # まだリセット時刻に達していない
+        return []  # まだリセット時刻に達していない
 
-    # リセット対象となる「終わった論理日」
-    closed_day = (profile.next_reset_at - timedelta(days=1)).date()
-    new_today = profile.next_reset_at.date()
+    # 通知はタスク×種類ごとに最新だけ残す（5日分溜めて同じ通知を5回出さない）
+    latest: dict[tuple[int, str], str] = {}
+    boundary = timezone.localtime(profile.next_reset_at)
+    local_now = timezone.localtime(now)
 
+    for _ in range(MAX_CATCHUP_DAYS):
+        if boundary > local_now:
+            break
+        _close_logical_day(
+            profile,
+            closed_day=(boundary - timedelta(days=1)).date(),
+            new_today=boundary.date(),
+            latest=latest,
+        )
+        # 延長は当日限り。次の境界は通常運用の午前4時に戻る。
+        boundary = UserProfile.local_at(
+            boundary.date() + timedelta(days=1), UserProfile.DEFAULT_BOUNDARY
+        )
+    else:
+        # 極端に長く放置された場合の保険（休日権利は上限まで消費済み）
+        boundary = UserProfile.default_next_reset(now)
+
+    profile.next_reset_at = boundary
+    profile.save(update_fields=["next_reset_at"])
+    return list(latest.values())
+
+
+def _close_logical_day(
+    profile: UserProfile,
+    closed_day: date,
+    new_today: date,
+    latest: dict[tuple[int, str], str],
+) -> None:
+    """終わった論理日1日ぶんの締め処理（休日消費・ゾンビ移行・C の後ろ倒し）。"""
     for task in profile.user.tasks.filter(status=TaskStatus.ACTIVE):
         had_progress = ProgressLog.objects.filter(
             task=task, logical_date=closed_day
@@ -218,7 +250,7 @@ def run_daily_reset(profile: UserProfile, now=None) -> list[str]:
         ):
             task.status = TaskStatus.ZOMBIE
             task.save(update_fields=["status"])
-            notices.append(
+            latest[(task.id, "zombie")] = (
                 f"ℹ️ 逆算停止：期日を超過。「{task.title}」の残タスクを消化してください"
             )
 
@@ -230,11 +262,6 @@ def run_daily_reset(profile: UserProfile, now=None) -> list[str]:
             if task.projected_completion and new_projection > task.projected_completion:
                 task.projected_completion = new_projection
                 task.save(update_fields=["projected_completion"])
-                notices.append(
+                latest[(task.id, "projection")] = (
                     f"「{task.title}」の完了予定日を{new_projection:%m/%d}に延ばしました"
                 )
-
-    # 次回更新日時をデフォルト（翌・午前4時）へ戻す
-    profile.next_reset_at = UserProfile.default_next_reset(now)
-    profile.save(update_fields=["next_reset_at"])
-    return notices
