@@ -9,6 +9,7 @@ urlpatterns = [
     path("api/auth/logout/", auth.logout),
     # タスク（要ログイン）
     path("api/tasks/", views.task_list),
+    path("api/tasks/<int:task_id>/", views.task_detail),  # PATCH=編集 / DELETE=削除
     path("api/tasks/<int:task_id>/complete/", views.complete),
     path("api/tasks/<int:task_id>/uncomplete/", views.uncomplete),
     path("api/tasks/<int:task_id>/progress/", views.progress),

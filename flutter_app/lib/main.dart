@@ -38,6 +38,11 @@ class TaskTile {
   final DateTime? targetDeadline; // 目標期日 ＝ 実際の期日 − マージン
   final int marginDays;
   final TriageState triage;
+  // 編集フォームの初期値に使う元データ
+  final int totalAmount;
+  final int completedAmount;
+  final int workDaysPerWeek;
+  final int? fixedDailyAmount;
 
   TaskTile.fromJson(Map<String, dynamic> j)
       : id = j['id'],
@@ -52,7 +57,11 @@ class TaskTile {
         actualDeadline = parseDate(j['actual_deadline']),
         targetDeadline = parseDate(j['target_deadline']),
         marginDays = j['margin_days'] ?? 0,
-        triage = TriageState.fromJson(j['triage']);
+        triage = TriageState.fromJson(j['triage']),
+        totalAmount = j['total_amount'] ?? j['remaining_amount'] ?? 0,
+        completedAmount = j['completed_amount'] ?? 0,
+        workDaysPerWeek = j['work_days_per_week'] ?? 7,
+        fixedDailyAmount = j['fixed_daily_amount'];
 }
 
 class TriageOption {
@@ -230,6 +239,22 @@ class ApiClient {
     if (isMock) return _MockData.create(body);
     final r = await http.post(Uri.parse('$baseUrl/api/tasks/'),
         headers: _headers, body: jsonEncode(body));
+    _decode(r);
+  }
+
+  /// タスク編集。送ったフィールドだけ更新される（PATCH `/api/tasks/<id>/`）。
+  Future<void> updateTask(int id, Map<String, dynamic> body) async {
+    if (isMock) return _MockData.update(id, body);
+    final r = await http.patch(Uri.parse('$baseUrl/api/tasks/$id/'),
+        headers: _headers, body: jsonEncode(body));
+    _decode(r);
+  }
+
+  /// タスク削除（DELETE `/api/tasks/<id>/`）。
+  Future<void> deleteTask(int id) async {
+    if (isMock) return _MockData.delete(id);
+    final r = await http.delete(Uri.parse('$baseUrl/api/tasks/$id/'),
+        headers: _headers);
     _decode(r);
   }
 
@@ -778,7 +803,52 @@ class _TileStackScreenState extends State<TileStackScreen> {
     }
   }
 
+  // 長押し → 操作メニュー（部分完了の記録 / 編集 / 削除）
   Future<void> _longPressMenu(TaskTile t) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(t.title,
+                  style: Theme.of(ctx).textTheme.titleMedium,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+            ListTile(
+              leading: const Icon(Icons.playlist_add_check),
+              title: const Text('部分完了を記録'),
+              onTap: () => Navigator.pop(ctx, 'partial'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('編集する'),
+              onTap: () => Navigator.pop(ctx, 'edit'),
+            ),
+            ListTile(
+              leading: Icon(Icons.delete_outline,
+                  color: Theme.of(ctx).colorScheme.error),
+              title: Text('削除する',
+                  style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    switch (action) {
+      case 'partial':
+        await _recordPartial(t);
+      case 'edit':
+        await _editTask(t);
+      case 'delete':
+        await _deleteTask(t);
+    }
+  }
+
+  Future<void> _recordPartial(TaskTile t) async {
     final controller = TextEditingController();
     final amount = await showDialog<int>(
       context: context,
@@ -807,6 +877,46 @@ class _TileStackScreenState extends State<TileStackScreen> {
     if (amount != null && amount > 0) {
       await api.partialProgress(t.id, amount);
       _load(); // タイルは残り続け「今日の残りノルマ」で再描画される（§3）
+    }
+  }
+
+  // 編集画面へ遷移。保存されたら一覧を再取得する。
+  Future<void> _editTask(TaskTile t) async {
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => TaskFormScreen(task: t)),
+    );
+    if (saved == true) _load();
+  }
+
+  // 削除。取り消せない操作なので確認を挟む。
+  Future<void> _deleteTask(TaskTile t) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('削除しますか？'),
+        content: Text('「${t.title}」を削除します。これまでの進捗も含めて'
+            '完全に削除され、元に戻せません。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('キャンセル')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('削除する'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await api.deleteTask(t.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('「${t.title}」を削除しました')));
+      }
+      _load();
     }
   }
 
@@ -1213,7 +1323,11 @@ class _TileStackScreenState extends State<TileStackScreen> {
 // ---------------------------------------------------------------------------
 
 class TaskFormScreen extends StatefulWidget {
-  const TaskFormScreen({super.key});
+  const TaskFormScreen({super.key, this.task});
+
+  /// null なら新規作成。渡されるとそのタスクの編集モードになる。
+  final TaskTile? task;
+
   @override
   State<TaskFormScreen> createState() => _TaskFormScreenState();
 }
@@ -1240,6 +1354,26 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
   static const _defaultMargin = {'A': '3', 'B': '2'};
 
   bool get _isRoutine => _level == 'D';
+  bool get _isEdit => widget.task != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final t = widget.task;
+    if (t == null) return;
+    // 編集モード: 既存の値をフォームに反映する。
+    _title.text = t.title;
+    _unit.text = t.unit;
+    _level = t.level;
+    _workDays = t.workDaysPerWeek;
+    _deadline = t.actualDeadline;
+    _margin.text = t.marginDays.toString();
+    if (t.level == 'D') {
+      _fixed.text = (t.fixedDailyAmount ?? 0).toString();
+    } else {
+      _total.text = t.totalAmount.toString();
+    }
+  }
 
   @override
   void dispose() {
@@ -1287,7 +1421,11 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
       },
     };
     try {
-      await api.createTask(body);
+      if (_isEdit) {
+        await api.updateTask(widget.task!.id, body);
+      } else {
+        await api.createTask(body);
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _saving = false);
@@ -1302,7 +1440,7 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('タスクを追加')),
+      appBar: AppBar(title: Text(_isEdit ? 'タスクを編集' : 'タスクを追加')),
       body: Form(
         key: _formKey,
         child: ListView(
@@ -1418,7 +1556,7 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
               key: const Key('save_task'),
               onPressed: _saving ? null : _save,
               icon: const Icon(Icons.check),
-              label: const Text('タスクを追加'),
+              label: Text(_isEdit ? '保存する' : 'タスクを追加'),
             ),
           ],
         ),
@@ -1575,6 +1713,48 @@ class _MockData {
     final rem = (t['today_quota'] as int) - (t['today_done'] as int);
     t['today_remaining'] = rem < 0 ? 0 : rem;
     t['in_progress_today'] = rem > 0;
+  }
+
+  static void delete(int id) => _raw.removeWhere((x) => x['id'] == id);
+
+  // 編集の簡易再現。渡されたフィールドを反映し、ノルマを create と同様に引き直す。
+  static void update(int id, Map<String, dynamic> body) {
+    final t = _raw.firstWhere((x) => x['id'] == id);
+    for (final k in ['title', 'level', 'unit']) {
+      if (body.containsKey(k)) t[k] = body[k];
+    }
+    final level = t['level'] as String;
+    if (level == 'D') {
+      final q = body['fixed_daily_amount'] as int? ?? t['today_quota'] as int;
+      t['today_quota'] = q;
+      t['today_remaining'] = q;
+      t['remaining_amount'] = q;
+      t['actual_deadline'] = null;
+      t['target_deadline'] = null;
+    } else {
+      final total =
+          body['total_amount'] as int? ?? t['remaining_amount'] as int;
+      final marginDays =
+          body['margin_days'] as int? ?? t['margin_days'] as int? ?? 0;
+      final workDays = body['work_days_per_week'] as int? ?? 7;
+      final iso = body['actual_deadline'] as String? ??
+          t['actual_deadline'] as String?;
+      if (iso != null) {
+        final deadline = DateTime.parse(iso);
+        final target = deadline.subtract(Duration(days: marginDays));
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final cal = target.difference(today).inDays + 1;
+        final rest = (cal * (7 - workDays)) ~/ 7;
+        final wd = cal - rest;
+        t['actual_deadline'] = iso;
+        t['target_deadline'] = ymd(target);
+        t['margin_days'] = marginDays;
+        t['today_quota'] = wd > 0 ? (total + wd - 1) ~/ wd : total;
+        t['today_remaining'] = t['today_quota'];
+      }
+      t['remaining_amount'] = total;
+    }
   }
 
   // トリアージ選択の適用。実バックエンドでは選択に応じて再計算されるが、

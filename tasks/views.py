@@ -3,6 +3,8 @@ Flutterフロント向けのシンプルなJSON API。
 
 - GET  /api/tasks/            : 今日のタイルスタック（レベル順・進行中は各レベル最上部）
 - POST /api/tasks/            : タスク作成
+- PATCH  /api/tasks/<id>/     : タスク編集（送信フィールドのみ更新しペース再計算）
+- DELETE /api/tasks/<id>/     : タスク削除
 - POST /api/tasks/<id>/complete/  : ワンタップ完了
 - POST /api/tasks/<id>/progress/  : 部分完了（実績数値入力）
 - GET  /api/tasks/<id>/triage/    : トリアージ状態
@@ -63,6 +65,11 @@ def _task_payload(task: Task, today: date) -> dict:
         "today_done": today_done,
         "today_remaining": max(quota - today_done, 0),
         "remaining_amount": task.remaining_amount,
+        # 編集フォームの初期値に使う元データ
+        "total_amount": task.total_amount,
+        "completed_amount": task.completed_amount,
+        "work_days_per_week": task.work_days_per_week,
+        "fixed_daily_amount": task.fixed_daily_amount,
         "actual_deadline": task.actual_deadline.isoformat() if task.actual_deadline else None,
         "target_deadline": task.target_deadline.isoformat() if task.target_deadline else None,
         "margin_days": task.margin_days,
@@ -135,6 +142,49 @@ def task_list(request):
             "tasks": tasks,
         }
     )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH", "DELETE"])
+def task_detail(request, task_id: int):
+    """タスクの編集（PATCH）と削除（DELETE）。"""
+    profile = _profile(request)
+    today = profile.logical_today(timezone.now())
+    task = _get_task(request, task_id)
+    if task is None:
+        return _not_found()
+
+    if request.method == "DELETE":
+        task.delete()
+        return JsonResponse({"deleted": True})
+
+    # PATCH: 送られてきたフィールドだけ更新する。
+    body = json.loads(request.body)
+    if "title" in body:
+        task.title = body["title"]
+    if "level" in body:
+        task.level = body["level"]
+    if "unit" in body:
+        task.unit = body.get("unit") or "ページ"
+    if "total_amount" in body:
+        task.total_amount = int(body["total_amount"])
+    if "fixed_daily_amount" in body:
+        task.fixed_daily_amount = body["fixed_daily_amount"]
+    if "margin_days" in body:
+        task.margin_days = int(body["margin_days"])
+    if "work_days_per_week" in body:
+        task.work_days_per_week = int(body["work_days_per_week"])
+    if "actual_deadline" in body:
+        task.actual_deadline = (
+            date.fromisoformat(body["actual_deadline"])
+            if body["actual_deadline"]
+            else None
+        )
+    # 全体量・期日・レベル等の変更を「今日」基準で反映する。消化済み分は保持され、
+    # 残量ベースで標準ペース（トリアージ判定の基準）と休日権利を引き直す。
+    task.initialize_pace(today)
+    task.save()
+    return JsonResponse(_task_payload(task, today))
 
 
 @csrf_exempt

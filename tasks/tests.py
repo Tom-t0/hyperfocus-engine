@@ -452,3 +452,104 @@ class UncompleteTests(TestCase):
         services.uncomplete_today(task, TODAY)
         self.assertEqual(task.status, TaskStatus.ACTIVE)
         self.assertEqual(task.remaining_amount, 10)
+
+
+class TaskEditDeleteApiTests(TestCase):
+    """タスクの編集（PATCH）と削除（DELETE）"""
+
+    def setUp(self):
+        self.client = Client()
+        reg = self.client.post(
+            "/api/auth/register/",
+            data=json.dumps({"username": "owner", "password": "Str0ng-Pass-99"}),
+            content_type="application/json",
+        )
+        self.token = reg.json()["token"]
+        self.auth = {"HTTP_AUTHORIZATION": f"Token {self.token}"}
+        self.user = User.objects.get(username="owner")
+
+    def _create(self, **over):
+        body = {
+            "title": "原稿",
+            "level": "B",
+            "unit": "ページ",
+            "total_amount": 100,
+            "actual_deadline": "2026-12-31",
+            "margin_days": 0,
+        }
+        body.update(over)
+        r = self.client.post(
+            "/api/tasks/", data=json.dumps(body),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(r.status_code, 201)
+        return r.json()["id"]
+
+    def _patch(self, task_id, payload):
+        return self.client.patch(
+            f"/api/tasks/{task_id}/", data=json.dumps(payload),
+            content_type="application/json", **self.auth,
+        )
+
+    def test_delete_removes_task(self):
+        task_id = self._create()
+        r = self.client.delete(f"/api/tasks/{task_id}/", **self.auth)
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(Task.objects.filter(id=task_id).exists())
+        self.assertEqual(len(self.client.get("/api/tasks/", **self.auth).json()["tasks"]), 0)
+
+    def test_delete_others_task_forbidden(self):
+        task_id = self._create()
+        other = self.client.post(
+            "/api/auth/register/",
+            data=json.dumps({"username": "intruder", "password": "Str0ng-Pass-99"}),
+            content_type="application/json",
+        ).json()["token"]
+        r = self.client.delete(
+            f"/api/tasks/{task_id}/", HTTP_AUTHORIZATION=f"Token {other}"
+        )
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(Task.objects.filter(id=task_id).exists())
+
+    def test_edit_title_and_unit(self):
+        task_id = self._create()
+        r = self._patch(task_id, {"title": "改題", "unit": "問"})
+        self.assertEqual(r.status_code, 200)
+        task = Task.objects.get(id=task_id)
+        self.assertEqual(task.title, "改題")
+        self.assertEqual(task.unit, "問")
+
+    def test_edit_total_amount_recomputes_quota(self):
+        # 期日を今日基準で10日先に。100→50に減らせばノルマも半減する。
+        task_id = self._create(actual_deadline=None)
+        today = date.fromisoformat(self.client.get("/api/tasks/", **self.auth).json()["today"])
+        deadline = (today + timedelta(days=9)).isoformat()  # 今日含め10日
+        self._patch(task_id, {"actual_deadline": deadline, "total_amount": 100})
+        before = self.client.get("/api/tasks/", **self.auth).json()["tasks"][0]["today_quota"]
+        self.assertEqual(before, 10)
+        r = self._patch(task_id, {"total_amount": 50})
+        self.assertEqual(r.json()["today_quota"], 5)
+
+    def test_edit_preserves_completed_amount(self):
+        task_id = self._create()
+        self.client.post(f"/api/tasks/{task_id}/progress/",
+                         data=json.dumps({"amount": 20}),
+                         content_type="application/json", **self.auth)
+        self._patch(task_id, {"total_amount": 80})
+        task = Task.objects.get(id=task_id)
+        self.assertEqual(task.completed_amount, 20)  # 消化済みは保持
+        self.assertEqual(task.remaining_amount, 60)  # 80 - 20
+
+    def test_edit_others_task_forbidden(self):
+        task_id = self._create()
+        other = self.client.post(
+            "/api/auth/register/",
+            data=json.dumps({"username": "intruder2", "password": "Str0ng-Pass-99"}),
+            content_type="application/json",
+        ).json()["token"]
+        r = self.client.patch(
+            f"/api/tasks/{task_id}/", data=json.dumps({"title": "乗っ取り"}),
+            content_type="application/json", HTTP_AUTHORIZATION=f"Token {other}",
+        )
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(Task.objects.get(id=task_id).title, "原稿")
