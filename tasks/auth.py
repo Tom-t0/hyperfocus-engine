@@ -32,18 +32,30 @@ def _read(request):
 def register(request):
     username, password = _read(request)
     if not username or not password:
-        return JsonResponse({"error": "ユーザー名とパスワードは必須です"}, status=400)
+        return JsonResponse(
+            {"error": "ユーザー名とパスワードは必須です",
+             "code": "missing_credentials"}, status=400
+        )
     if len(username) > MAX_USERNAME:
-        return JsonResponse({"error": "ユーザー名が長すぎます"}, status=400)
+        return JsonResponse(
+            {"error": "ユーザー名が長すぎます", "code": "username_too_long"},
+            status=400,
+        )
     try:
         validate_password(password)
     except ValidationError as e:
-        return JsonResponse({"error": " ".join(e.messages)}, status=400)
+        # Djangoの検証メッセージはAccept-Languageに応じて翻訳される
+        return JsonResponse(
+            {"error": " ".join(e.messages), "code": "weak_password"}, status=400
+        )
     try:
         with transaction.atomic():
             user = User.objects.create_user(username=username, password=password)
     except IntegrityError:
-        return JsonResponse({"error": "このユーザー名は既に使われています"}, status=409)
+        return JsonResponse(
+            {"error": "このユーザー名は既に使われています", "code": "username_taken"},
+            status=409,
+        )
     token = AuthToken.issue(user)
     return JsonResponse({"token": token.key, "username": user.username}, status=201)
 
@@ -53,11 +65,15 @@ def register(request):
 def login(request):
     username, password = _read(request)
     if not username or not password:
-        return JsonResponse({"error": "ユーザー名とパスワードは必須です"}, status=400)
+        return JsonResponse(
+            {"error": "ユーザー名とパスワードは必須です",
+             "code": "missing_credentials"}, status=400
+        )
     user = authenticate(username=username, password=password)
     if user is None:
         return JsonResponse(
-            {"error": "ユーザー名またはパスワードが違います"}, status=401
+            {"error": "ユーザー名またはパスワードが違います",
+             "code": "invalid_credentials"}, status=401
         )
     token = AuthToken.issue(user)
     return JsonResponse({"token": token.key, "username": user.username})

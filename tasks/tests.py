@@ -650,3 +650,80 @@ class TaskEditDeleteApiTests(TestCase):
         )
         self.assertEqual(r.status_code, 404)
         self.assertEqual(Task.objects.get(id=task_id).title, "原稿")
+
+
+class LocalizationApiTests(TestCase):
+    """多言語対応: エラーは翻訳キー(code)を返し、Django標準の文言は言語に追従する"""
+
+    def setUp(self):
+        self.client = Client()
+
+    def _register(self, username, password, lang=None):
+        kw = {"HTTP_ACCEPT_LANGUAGE": lang} if lang else {}
+        return self.client.post(
+            "/api/auth/register/",
+            data=json.dumps({"username": username, "password": password}),
+            content_type="application/json",
+            **kw,
+        )
+
+    def test_error_responses_carry_a_translation_code(self):
+        r = self.client.get("/api/tasks/")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["code"], "auth_required")
+
+        self.assertEqual(self._register("", "").json()["code"], "missing_credentials")
+
+        self._register("dup", "Str0ng-Pass-99")
+        again = self._register("dup", "Str0ng-Pass-99")
+        self.assertEqual(again.status_code, 409)
+        self.assertEqual(again.json()["code"], "username_taken")
+
+        bad = self.client.post(
+            "/api/auth/login/",
+            data=json.dumps({"username": "dup", "password": "wrong"}),
+            content_type="application/json",
+        )
+        self.assertEqual(bad.json()["code"], "invalid_credentials")
+
+    def test_task_not_found_carries_code(self):
+        token = self._register("nf", "Str0ng-Pass-99").json()["token"]
+        r = self.client.post(
+            "/api/tasks/999/complete/", HTTP_AUTHORIZATION=f"Token {token}"
+        )
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["code"], "task_not_found")
+
+    def test_password_message_follows_accept_language(self):
+        en = self._register("weak_en", "123", lang="en")
+        ja = self._register("weak_ja", "123", lang="ja")
+        self.assertEqual((en.status_code, ja.status_code), (400, 400))
+        self.assertEqual(en.json()["code"], "weak_password")
+        self.assertIn("too short", en.json()["error"])
+        # 日本語では翻訳された別の文言になる
+        self.assertNotEqual(en.json()["error"], ja.json()["error"])
+
+
+class TriageErrorCodeTests(TestCase):
+    """トリアージのエラーも翻訳キーを持ち、合意入力は日英どちらでも通る"""
+
+    def setUp(self):
+        self.user = User.objects.create(username="u")
+
+    def test_triage_error_carries_code(self):
+        task = make_task(self.user, level=Level.A)
+        with self.assertRaises(ValueError) as ctx:
+            services.apply_triage_choice(task, "archive", TODAY)
+        self.assertEqual(ctx.exception.code, "level_a_no_archive")
+
+    def test_friction_phrase_accepts_japanese_or_english(self):
+        for phrase in ("関係者と合意済み", "Agreed with stakeholders"):
+            task = make_task(self.user, level=Level.A, margin_days=0)
+            services.apply_triage_choice(
+                task,
+                "reset_deadline_with_friction",
+                TODAY,
+                new_deadline=TODAY + timedelta(days=30),
+                friction_text=phrase,
+            )
+            self.assertEqual(task.actual_deadline, TODAY + timedelta(days=30))

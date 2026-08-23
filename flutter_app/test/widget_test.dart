@@ -1,10 +1,26 @@
 // モックデータでタイルスタックUIが起動することを確認するスモークテスト
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:deadline_app/l10n.dart';
 import 'package:deadline_app/main.dart';
 
+/// 日本語に固定した MaterialApp で単体の画面を包む。
+Widget jaApp(Widget home) => MaterialApp(
+      locale: const Locale('ja'),
+      supportedLocales: const [Locale('en'), Locale('ja')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      home: home,
+    );
+
 void main() {
+  // 本ファイルは日本語UIを検証する（英語は l10n_test.dart）
+  setUp(() => LocaleController.locale.value = const Locale('ja'));
   testWidgets('タイルスタックが表示される', (WidgetTester tester) async {
     await tester.pumpWidget(const QuotaApp());
     await tester.pumpAndSettle();
@@ -55,9 +71,7 @@ void main() {
   });
 
   testWidgets('ログイン画面: 登録モードに切り替えできる', (WidgetTester tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: LoginScreen(onSuccess: () {}),
-    ));
+    await tester.pumpWidget(jaApp(LoginScreen(onSuccess: () {})));
     await tester.pumpAndSettle();
 
     // 初期はログインモード
@@ -76,9 +90,7 @@ void main() {
   });
 
   testWidgets('ログイン前に使い方案内を開ける', (WidgetTester tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: LoginScreen(onSuccess: () {}),
-    ));
+    await tester.pumpWidget(jaApp(LoginScreen(onSuccess: () {})));
     await tester.pumpAndSettle();
 
     final guideBtn = find.text('はじめての方へ・使い方を見る');

@@ -17,7 +17,10 @@ class TokenAuthMiddleware:
         if needs_auth:
             user = self._user_from_header(request.headers.get("Authorization", ""))
             if user is None:
-                return JsonResponse({"error": "認証が必要です"}, status=401)
+                return JsonResponse(
+                    {"error": "認証が必要です", "code": "auth_required"},
+                    status=401,
+                )
             request.user = user
         return self.get_response(request)
 

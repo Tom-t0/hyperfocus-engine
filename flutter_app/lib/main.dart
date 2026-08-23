@@ -12,13 +12,28 @@
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() => runApp(const QuotaApp());
+import 'l10n.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await LocaleController.load(); // 保存された表示言語を復元してから起動する
+  runApp(const QuotaApp());
+}
 
 /// 認証切れ（401）を表す。UIはこれを捕捉してログイン画面へ戻す。
 class UnauthorizedException implements Exception {}
+
+/// APIエラー。code はサーバーが返す識別子（翻訳に使う）、
+/// message はサーバーが返した文言（未知のcodeのときの保険）。
+class ApiError {
+  final String? code;
+  final String message;
+  const ApiError(this.code, this.message);
+}
 
 // ---------------------------------------------------------------------------
 // モデル
@@ -147,8 +162,13 @@ class ApiClient {
     await prefs.remove(_userKey);
   }
 
+  /// サーバー側が返すメッセージ（Djangoのパスワード検証など）の言語。
+  /// MaterialApp が解決したロケールで更新される。
+  static String langCode = 'ja';
+
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
+        'Accept-Language': langCode,
         if (_token != null) 'Authorization': 'Token $_token',
       };
 
@@ -161,15 +181,16 @@ class ApiClient {
 
   // ---- 認証 ----------------------------------------------------------
 
-  /// ログイン。成功でnull、失敗でエラーメッセージを返す。
-  Future<String?> login(String user, String password) =>
+  /// ログイン。成功でnull、失敗でエラーを返す。
+  Future<ApiError?> login(String user, String password) =>
       _authRequest('login', user, password);
 
-  /// 新規登録。成功でnull、失敗でエラーメッセージを返す。
-  Future<String?> register(String user, String password) =>
+  /// 新規登録。成功でnull、失敗でエラーを返す。
+  Future<ApiError?> register(String user, String password) =>
       _authRequest('register', user, password);
 
-  Future<String?> _authRequest(String kind, String user, String password) async {
+  Future<ApiError?> _authRequest(
+      String kind, String user, String password) async {
     if (isMock) {
       await _saveToken('mock-token', user);
       return null;
@@ -178,17 +199,21 @@ class ApiClient {
     try {
       r = await http.post(
         Uri.parse('$baseUrl/api/auth/$kind/'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept-Language': langCode,
+        },
         body: jsonEncode({'username': user, 'password': password}),
       );
     } catch (_) {
-      return 'サーバーに接続できません。通信環境を確認してください。';
+      return const ApiError('connection', '');
     }
     final body = r.body.isEmpty
         ? <String, dynamic>{}
         : jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     if (r.statusCode >= 400) {
-      return body['error'] as String? ?? '失敗しました（${r.statusCode}）';
+      return ApiError(body['code'] as String?,
+          body['error'] as String? ?? 'HTTP ${r.statusCode}');
     }
     await _saveToken(body['token'] as String, body['username'] as String);
     return null;
@@ -265,7 +290,7 @@ class ApiClient {
     _decode(r);
   }
 
-  Future<String?> applyTriage(int id, String choice,
+  Future<ApiError?> applyTriage(int id, String choice,
       {String? newDeadline, String? frictionText}) async {
     if (isMock) return _MockData.applyTriage(id, choice);
     final r = await http.post(Uri.parse('$baseUrl/api/tasks/$id/triage/'),
@@ -277,7 +302,8 @@ class ApiClient {
         }));
     if (r.statusCode == 401) throw UnauthorizedException();
     if (r.statusCode >= 400) {
-      return jsonDecode(utf8.decode(r.bodyBytes))['error'] as String?;
+      final b = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      return ApiError(b['code'] as String?, b['error'] as String? ?? '');
     }
     return null;
   }
@@ -304,14 +330,53 @@ class ApiClient {
 // アプリ本体
 // ---------------------------------------------------------------------------
 
+/// 表示言語の切り替え（端末の設定に従う / 日本語 / English）。
+class LanguageButton extends StatelessWidget {
+  const LanguageButton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tr(context);
+    return PopupMenuButton<String>(
+      tooltip: t.languageLabel,
+      icon: const Icon(Icons.language),
+      initialValue: LocaleController.locale.value?.languageCode ?? 'system',
+      onSelected: (v) =>
+          LocaleController.set(v == 'system' ? null : Locale(v)),
+      itemBuilder: (_) => [
+        PopupMenuItem(value: 'system', child: Text(t.languageSystem)),
+        PopupMenuItem(value: 'ja', child: Text(t.japanese)),
+        PopupMenuItem(value: 'en', child: Text(t.english)),
+      ],
+    );
+  }
+}
+
 class QuotaApp extends StatelessWidget {
   const QuotaApp({super.key});
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'タスクタイル',
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
-      home: const RootScreen(),
+    return ValueListenableBuilder<Locale?>(
+      valueListenable: LocaleController.locale,
+      builder: (context, override, _) => MaterialApp(
+        onGenerateTitle: (ctx) => tr(ctx).appTitle,
+        // override が null なら端末の言語設定に従う。
+        // 未対応の言語なら supportedLocales の先頭（英語）にフォールバックする。
+        locale: override,
+        supportedLocales: const [Locale('en'), Locale('ja')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        builder: (ctx, child) {
+          // サーバーへ送る Accept-Language を実際の表示言語に合わせる
+          ApiClient.langCode = Localizations.localeOf(ctx).languageCode;
+          return child!;
+        },
+        theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
+        home: const RootScreen(),
+      ),
     );
   }
 }
@@ -384,7 +449,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _pass = TextEditingController();
   bool _registerMode = false;
   bool _busy = false;
-  String? _error;
+  ApiError? _error;
 
   @override
   void dispose() {
@@ -415,6 +480,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = tr(context);
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
@@ -427,45 +493,49 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  const Align(
+                    alignment: Alignment.centerRight,
+                    child: LanguageButton(),
+                  ),
                   Icon(Icons.checklist_rtl,
                       size: 56,
                       color: Theme.of(context).colorScheme.primary),
                   const SizedBox(height: 12),
-                  Text('タスクタイル',
+                  Text(t.appTitle,
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.headlineSmall),
                   const SizedBox(height: 32),
                   TextFormField(
                     controller: _user,
-                    decoration: const InputDecoration(
-                      labelText: 'ユーザー名',
-                      prefixIcon: Icon(Icons.person_outline),
+                    decoration: InputDecoration(
+                      labelText: t.usernameLabel,
+                      prefixIcon: const Icon(Icons.person_outline),
                     ),
                     textInputAction: TextInputAction.next,
                     validator: (v) => (v == null || v.trim().isEmpty)
-                        ? 'ユーザー名を入力してください'
+                        ? t.usernameRequired
                         : null,
                   ),
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _pass,
                     obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'パスワード',
-                      prefixIcon: Icon(Icons.lock_outline),
+                    decoration: InputDecoration(
+                      labelText: t.passwordLabel,
+                      prefixIcon: const Icon(Icons.lock_outline),
                     ),
                     onFieldSubmitted: (_) => _submit(),
                     validator: (v) {
-                      if (v == null || v.isEmpty) return 'パスワードを入力してください';
+                      if (v == null || v.isEmpty) return t.passwordRequired;
                       if (_registerMode && v.length < 8) {
-                        return '8文字以上にしてください';
+                        return t.passwordMin8;
                       }
                       return null;
                     },
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 16),
-                    Text(_error!,
+                    Text(t.apiError(_error!.code, _error!.message),
                         style: TextStyle(
                             color: Theme.of(context).colorScheme.error)),
                   ],
@@ -479,7 +549,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               width: 20,
                               height: 20,
                               child: CircularProgressIndicator(strokeWidth: 2))
-                          : Text(_registerMode ? 'アカウント作成' : 'ログイン'),
+                          : Text(_registerMode ? t.createAccount : t.login),
                     ),
                   ),
                   TextButton(
@@ -490,8 +560,8 @@ class _LoginScreenState extends State<LoginScreen> {
                               _error = null;
                             }),
                     child: Text(_registerMode
-                        ? 'アカウントをお持ちの方はログイン'
-                        : '新規登録はこちら'),
+                        ? t.switchToLogin
+                        : t.switchToRegister),
                   ),
                   const Divider(height: 24),
                   TextButton.icon(
@@ -500,7 +570,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       MaterialPageRoute(builder: (_) => const GuideScreen()),
                     ),
                     icon: const Icon(Icons.help_outline, size: 18),
-                    label: const Text('はじめての方へ・使い方を見る'),
+                    label: Text(t.openGuide),
                   ),
                 ],
               ),
@@ -517,11 +587,13 @@ class _LoginScreenState extends State<LoginScreen> {
 // ---------------------------------------------------------------------------
 
 class GuideScreen extends StatelessWidget {
-  final String backLabel; // 戻るボタンの文言（開いた画面に応じて変える）
-  const GuideScreen({super.key, this.backLabel = 'ログイン画面に戻る'});
+  /// ホームから開いたか（戻るボタンの文言だけ変える）。
+  final bool fromHome;
+  const GuideScreen({super.key, this.fromHome = false});
 
   @override
   Widget build(BuildContext context) {
+    final t = tr(context);
     final theme = Theme.of(context);
     Widget h(String text) => Padding(
           padding: const EdgeInsets.fromLTRB(0, 20, 0, 6),
@@ -538,46 +610,42 @@ class GuideScreen extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('・'),
+              Text(t.bulletMarker),
               Expanded(child: Text(text, style: theme.textTheme.bodyMedium)),
             ],
           ),
         );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('使い方')),
+      appBar: AppBar(
+        title: Text(t.guideTitle),
+        actions: const [LanguageButton()],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: [
-          h('タスクタイルとは'),
-          p('「全体の量」と「期日」を登録すると、今日やるべき量（ノルマ）を'
-              'アプリが自動で計算します。「今日どれだけやるか」を考えず、'
-              '提示されたタスクを上から順にこなしていくだけ、を目指したアプリです。'),
-          h('使い方（4ステップ）'),
-          bullet('① アカウントを作成してログインします。'),
-          bullet('② 右下の「＋ タスクを追加」で、やること・全体量・期日・'
-              '重要度レベルを登録します。'),
-          bullet('③ 毎日、各タスクに表示される「今日のノルマ」をこなします。'),
-          bullet('④ 終わったらタイルをタップして完了。少しだけ進めた日は、'
-              'タイルを長押しして実績（やった量）を入力します。'),
-          h('重要度レベル（A〜D）'),
-          bullet('A（Must）: 絶対に落とせない期日。仕事や提出物など。'),
-          bullet('B（Should）: 自分で決めた期日。資格勉強など。'),
-          bullet('C（Want）: 趣味・自己満。いつ終わってもよいもの。'),
-          bullet('D（Routine）: 終わりのない毎日の習慣。固定量を毎日提示。'),
-          h('便利な機能'),
-          bullet('各タイルの右端に、期日までの残り日数が出ます。'),
-          bullet('画面上部の日付の矢印で、前後の日のノルマを確認できます'
-              '（今日以外は閲覧のみ）。'),
-          bullet('ペースが乱れて1日のノルマが増えすぎると警告が出て、'
-              '立て直し方（マージン消費・強行突破など）を選べます。'),
-          h('ヒント'),
-          p('まずは小さなタスクを1つ登録して、毎日こなす感覚をつかんでみて'
-              'ください。'),
+          h(t.guideWhatIsHeading),
+          p(t.guideWhatIsBody),
+          h(t.guideStepsHeading),
+          bullet(t.guideStep1),
+          bullet(t.guideStep2),
+          bullet(t.guideStep3),
+          bullet(t.guideStep4),
+          h(t.guideLevelsHeading),
+          bullet(t.guideLevelA),
+          bullet(t.guideLevelB),
+          bullet(t.guideLevelC),
+          bullet(t.guideLevelD),
+          h(t.guideFeaturesHeading),
+          bullet(t.guideFeature1),
+          bullet(t.guideFeature2),
+          bullet(t.guideFeature3),
+          h(t.guideTipsHeading),
+          p(t.guideTipsBody),
           const SizedBox(height: 24),
           FilledButton(
             onPressed: () => Navigator.pop(context),
-            child: Text(backLabel),
+            child: Text(fromHome ? t.guideBackToHome : t.guideBackToLogin),
           ),
         ],
       ),
@@ -598,18 +666,11 @@ const levelColors = {
   'C': Color(0xFF43A047), // 緑
   'D': Color(0xFFBDBDBD), // 灰
 };
-const levelNames = {
-  'A': 'Must / 絶対不可侵',
-  'B': 'Should / 努力義務',
-  'C': 'Want / 趣味',
-  'D': 'Routine / 裏メニュー',
-};
-
 class _TileStackScreenState extends State<TileStackScreen> {
   final api = ApiClient();
   List<TaskTile> tiles = [];
   bool loading = true;
-  String? loadError;
+  bool loadError = false; // 言語変更に追従させるため文言ではなくフラグで持つ
   DateTime? selectedDate; // 表示中の日付（nullなら今日）
   DateTime? todayDate; // アプリ上の論理的な「今日」（サーバーから取得）
   bool showCompleted = false; // 全完了時に完了済みを表示するか
@@ -637,18 +698,19 @@ class _TileStackScreenState extends State<TileStackScreen> {
   }
 
   Future<void> _confirmLogout() async {
+    final t = tr(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('ログアウトしますか？'),
-        content: const Text('この端末からログアウトします。データはサーバーに残ります。'),
+        title: Text(t.logoutTitle),
+        content: Text(t.logoutBody),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('キャンセル')),
+              child: Text(t.cancel)),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('ログアウト')),
+              child: Text(t.logout)),
         ],
       ),
     );
@@ -671,7 +733,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
     } catch (_) {
       setState(() {
         loading = false;
-        loadError = 'サーバーに接続できません。通信環境を確認してください。';
+        loadError = true;
       });
       return;
     }
@@ -681,7 +743,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
       selectedDate ??= res.today; // 初回は今日を選択日にする
       showCompleted = false;
       loading = false;
-      loadError = null;
+      loadError = false;
     });
     // 今日を見ているときだけ、トリアージ発動中を強制オーバーレイ（§6-1）
     if (isToday) {
@@ -712,41 +774,26 @@ class _TileStackScreenState extends State<TileStackScreen> {
     _load();
   }
 
-  String _dateLabel(DateTime d) {
-    const wd = ['月', '火', '水', '木', '金', '土', '日'];
-    String rel = '';
-    if (todayDate != null) {
-      final diff = dateOnly(d).difference(dateOnly(todayDate!)).inDays;
-      if (diff == 0) {
-        rel = '・今日';
-      } else if (diff == -1) {
-        rel = '・昨日';
-      } else if (diff == 1) {
-        rel = '・明日';
-      }
-    }
-    return '${d.year}年${d.month}月${d.day}日（${wd[d.weekday - 1]}）$rel';
-  }
-
   // ---- §4-1 深夜ポップアップ ------------------------------------------
 
   void _showNightOwlPopup() {
+    final t = tr(context);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('まだ起きていますか？'),
-        content: const Text('本日のタスク更新時間を延長しますか？'),
+        title: Text(t.nightOwlTitle),
+        content: Text(t.nightOwlBody),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('いいえ（午前4時のまま）'),
+            child: Text(t.nightOwlKeep),
           ),
           FilledButton(
             onPressed: () {
               Navigator.pop(ctx);
               _pickExtensionTime();
             },
-            child: const Text('変更する'),
+            child: Text(t.nightOwlChange),
           ),
         ],
       ),
@@ -754,10 +801,11 @@ class _TileStackScreenState extends State<TileStackScreen> {
   }
 
   Future<void> _pickExtensionTime() async {
+    final t = tr(context);
     final picked = await showTimePicker(
       context: context,
       initialTime: const TimeOfDay(hour: 6, minute: 0),
-      helpText: '延長できるのは翌日の正午（12:00）まで',
+      helpText: t.timePickerHelp,
       // アナログ時計を使わずデジタル入力のみにする
       initialEntryMode: TimePickerEntryMode.inputOnly,
     );
@@ -768,7 +816,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
         '${capped.hour.toString().padLeft(2, '0')}:${capped.minute.toString().padLeft(2, '0')}');
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('更新時間を ${capped.format(context)} に延長しました')));
+          content: Text(t.extendedTo(capped.format(context)))));
     }
   }
 
@@ -780,31 +828,32 @@ class _TileStackScreenState extends State<TileStackScreen> {
   }
 
   // 完了済みタイルの再タップ → 確認の上で未完了へ戻す
-  Future<void> _confirmUncomplete(TaskTile t) async {
+  Future<void> _confirmUncomplete(TaskTile task) async {
+    final t = tr(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('未完了にしますか？'),
-        content: Text('「${t.title}」の今日の実績を取り消して、'
-            '今日のノルマを復活させます。'),
+        title: Text(t.uncompleteTitle),
+        content: Text(t.uncompleteBody(task.title)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('キャンセル')),
+              child: Text(t.cancel)),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('未完了に戻す')),
+              child: Text(t.uncompleteConfirm)),
         ],
       ),
     );
     if (ok == true) {
-      await api.uncompleteToday(t.id);
+      await api.uncompleteToday(task.id);
       _load();
     }
   }
 
   // 長押し → 操作メニュー（部分完了の記録 / 編集 / 削除）
-  Future<void> _longPressMenu(TaskTile t) async {
+  Future<void> _longPressMenu(TaskTile task) async {
+    final t = tr(context);
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -813,24 +862,24 @@ class _TileStackScreenState extends State<TileStackScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(t.title,
+              child: Text(task.title,
                   style: Theme.of(ctx).textTheme.titleMedium,
                   maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
             ListTile(
               leading: const Icon(Icons.playlist_add_check),
-              title: const Text('部分完了を記録'),
+              title: Text(t.menuPartial),
               onTap: () => Navigator.pop(ctx, 'partial'),
             ),
             ListTile(
               leading: const Icon(Icons.edit_outlined),
-              title: const Text('編集する'),
+              title: Text(t.menuEdit),
               onTap: () => Navigator.pop(ctx, 'edit'),
             ),
             ListTile(
               leading: Icon(Icons.delete_outline,
                   color: Theme.of(ctx).colorScheme.error),
-              title: Text('削除する',
+              title: Text(t.menuDelete,
                   style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
               onTap: () => Navigator.pop(ctx, 'delete'),
             ),
@@ -840,42 +889,43 @@ class _TileStackScreenState extends State<TileStackScreen> {
     );
     switch (action) {
       case 'partial':
-        await _recordPartial(t);
+        await _recordPartial(task);
       case 'edit':
-        await _editTask(t);
+        await _editTask(task);
       case 'delete':
-        await _deleteTask(t);
+        await _deleteTask(task);
     }
   }
 
-  Future<void> _recordPartial(TaskTile t) async {
+  Future<void> _recordPartial(TaskTile task) async {
+    final t = tr(context);
     final controller = TextEditingController();
     final amount = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('部分完了：${t.title}'),
+        title: Text(t.partialTitle(task.title)),
         content: TextField(
           controller: controller,
           keyboardType: TextInputType.number,
           autofocus: true,
           decoration: InputDecoration(
-            labelText: '今日やった量（${t.unit}）',
-            hintText: '例: 10',
+            labelText: t.partialLabel(task.unit),
+            hintText: t.partialHint,
           ),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('キャンセル')),
+              onPressed: () => Navigator.pop(ctx), child: Text(t.cancel)),
           FilledButton(
             onPressed: () =>
                 Navigator.pop(ctx, int.tryParse(controller.text) ?? 0),
-            child: const Text('記録する'),
+            child: Text(t.partialRecord),
           ),
         ],
       ),
     );
     if (amount != null && amount > 0) {
-      await api.partialProgress(t.id, amount);
+      await api.partialProgress(task.id, amount);
       _load(); // タイルは残り続け「今日の残りノルマ」で再描画される（§3）
     }
   }
@@ -890,31 +940,31 @@ class _TileStackScreenState extends State<TileStackScreen> {
   }
 
   // 削除。取り消せない操作なので確認を挟む。
-  Future<void> _deleteTask(TaskTile t) async {
+  Future<void> _deleteTask(TaskTile task) async {
+    final t = tr(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('削除しますか？'),
-        content: Text('「${t.title}」を削除します。これまでの進捗も含めて'
-            '完全に削除され、元に戻せません。'),
+        title: Text(t.deleteTitle),
+        content: Text(t.deleteBody(task.title)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('キャンセル')),
+              child: Text(t.cancel)),
           FilledButton(
             style: FilledButton.styleFrom(
                 backgroundColor: Theme.of(ctx).colorScheme.error),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('削除する'),
+            child: Text(t.deleteConfirm),
           ),
         ],
       ),
     );
     if (ok == true) {
-      await api.deleteTask(t.id);
+      await api.deleteTask(task.id);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('「${t.title}」を削除しました')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(t.deletedSnack(task.title))));
       }
       _load();
     }
@@ -922,22 +972,23 @@ class _TileStackScreenState extends State<TileStackScreen> {
 
   // ---- §6 トリアージ強制オーバーレイ -----------------------------------
 
-  void _showTriageOverlay(TaskTile t) {
+  void _showTriageOverlay(TaskTile task) {
+    final t = tr(context);
     showDialog(
       context: context,
       barrierDismissible: false, // 強制表示
       builder: (ctx) => AlertDialog(
         icon: const Icon(Icons.warning_amber_rounded, size: 40),
-        title: const Text('このままでは破綻します'),
+        title: Text(t.triageTitle),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('「${t.title}」の今日のノルマ: ${t.triage.quota}${t.unit}'
-                '（標準 ${t.triage.standard.toStringAsFixed(1)} の1.5倍超）'),
+            Text(t.triageBody(task.title, task.triage.quota, task.unit,
+                task.triage.standard)),
             const SizedBox(height: 12),
             // グレーアウトでも表示し続け、切迫感を突きつける（§6-1）
-            ...t.triage.options.map((o) => Padding(
+            ...task.triage.options.map((o) => Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: SizedBox(
                     width: double.infinity,
@@ -945,10 +996,10 @@ class _TileStackScreenState extends State<TileStackScreen> {
                       onPressed: o.enabled
                           ? () async {
                               Navigator.pop(ctx);
-                              await _applyTriage(t, o);
+                              await _applyTriage(task, o);
                             }
                           : null, // null = グレーアウト
-                      child: Text(o.label),
+                      child: Text(t.triageOption(o.key, o.label)),
                     ),
                   ),
                 )),
@@ -958,7 +1009,8 @@ class _TileStackScreenState extends State<TileStackScreen> {
     );
   }
 
-  Future<void> _applyTriage(TaskTile t, TriageOption o) async {
+  Future<void> _applyTriage(TaskTile task, TriageOption o) async {
+    final t = tr(context);
     String? frictionText;
     String? newDeadline;
     if (o.key == 'reset_deadline_with_friction') {
@@ -967,19 +1019,18 @@ class _TileStackScreenState extends State<TileStackScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('期日の再設定（レベルA）'),
+          title: Text(t.triageResetATitle),
           content: TextField(
             controller: c,
-            decoration: const InputDecoration(
-                labelText: '「関係者と合意済み」と入力してください'),
+            decoration: InputDecoration(labelText: t.frictionLabel),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('やめる')),
+                child: Text(t.frictionCancel)),
             FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('確定')),
+                child: Text(t.frictionConfirm)),
           ],
         ),
       );
@@ -997,11 +1048,11 @@ class _TileStackScreenState extends State<TileStackScreen> {
       newDeadline =
           '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
     }
-    final err = await api.applyTriage(t.id, o.key,
+    final err = await api.applyTriage(task.id, o.key,
         newDeadline: newDeadline, frictionText: frictionText);
     if (err != null && mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(err)));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.apiError(err.code, err.message))));
     }
     _load();
   }
@@ -1010,24 +1061,24 @@ class _TileStackScreenState extends State<TileStackScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = tr(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('タスクタイル'),
+        title: Text(t.appTitle),
         actions: [
+          const LanguageButton(),
           IconButton(
-            tooltip: '使い方',
+            tooltip: t.guideTooltip,
             icon: const Icon(Icons.help_outline),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => const GuideScreen(backLabel: 'ホーム画面に戻る')),
+                  builder: (_) => const GuideScreen(fromHome: true)),
             ),
           ),
           if (!ApiClient.isMock)
             IconButton(
-              tooltip: ApiClient.username == null
-                  ? 'ログアウト'
-                  : '${ApiClient.username} — ログアウト',
+              tooltip: t.logoutTooltip(ApiClient.username),
               icon: const Icon(Icons.logout),
               onPressed: _confirmLogout,
             ),
@@ -1042,21 +1093,21 @@ class _TileStackScreenState extends State<TileStackScreen> {
           if (created == true) _load();
         },
         icon: const Icon(Icons.add),
-        label: const Text('タスクを追加'),
+        label: Text(t.addTask),
       ),
       // §4-1 常時バナー: 作業途中の延長に対応
       bottomNavigationBar: Material(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         child: InkWell(
           onTap: _pickExtensionTime,
-          child: const Padding(
-            padding: EdgeInsets.all(12),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.nightlight_round, size: 16),
-                SizedBox(width: 8),
-                Text('更新時間を変更する'),
+                const Icon(Icons.nightlight_round, size: 16),
+                const SizedBox(width: 8),
+                Text(t.changeResetTime),
               ],
             ),
           ),
@@ -1064,21 +1115,21 @@ class _TileStackScreenState extends State<TileStackScreen> {
       ),
       body: loading
           ? const Center(child: CircularProgressIndicator())
-          : loadError != null
+          : loadError
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(Icons.cloud_off, size: 40),
                       const SizedBox(height: 12),
-                      Text(loadError!),
+                      Text(t.connectionError),
                       const SizedBox(height: 12),
                       FilledButton(
                         onPressed: () {
                           setState(() => loading = true);
                           _load();
                         },
-                        child: const Text('再試行'),
+                        child: Text(t.retry),
                       ),
                     ],
                   ),
@@ -1111,6 +1162,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
 
   // 画面上部の日付バー（矢印で前後の日へ移動）
   Widget _dateBar() {
+    final t = tr(context);
     final d = selectedDate ?? todayDate ?? DateTime.now();
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -1119,21 +1171,21 @@ class _TileStackScreenState extends State<TileStackScreen> {
           Row(
             children: [
               IconButton(
-                tooltip: '前の日',
+                tooltip: t.prevDay,
                 icon: const Icon(Icons.chevron_left),
                 onPressed: () => _shiftDay(-1),
               ),
               Expanded(
                 child: Center(
                   child: Text(
-                    _dateLabel(d),
+                    tr(context).dateLabel(d, todayDate),
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
               ),
               IconButton(
-                tooltip: '次の日',
+                tooltip: t.nextDay,
                 icon: const Icon(Icons.chevron_right),
                 onPressed: () => _shiftDay(1),
               ),
@@ -1145,7 +1197,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
               child: TextButton.icon(
                 onPressed: _backToToday,
                 icon: const Icon(Icons.today, size: 16),
-                label: const Text('今日に戻る（他の日は閲覧のみ）'),
+                label: Text(t.backToToday),
               ),
             ),
         ],
@@ -1155,6 +1207,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
 
   // 全タスク完了時／タスクが無いときの表示
   Widget _emptyState() {
+    final t = tr(context);
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1162,19 +1215,19 @@ class _TileStackScreenState extends State<TileStackScreen> {
           const Icon(Icons.check_circle_outline, size: 56, color: Colors.green),
           const SizedBox(height: 12),
           Text(
-            isToday ? '今日のタスクはありません' : 'この日のタスクはありません',
+            isToday ? t.emptyToday : t.emptyOtherDay,
             style: Theme.of(context).textTheme.titleMedium,
           ),
           if (isToday) ...[
             const SizedBox(height: 4),
-            Text('おつかれさまでした',
+            Text(t.goodWork,
                 style: Theme.of(context).textTheme.bodySmall),
           ],
           if (tiles.isNotEmpty) ...[
             const SizedBox(height: 12),
             TextButton(
               onPressed: () => setState(() => showCompleted = true),
-              child: const Text('完了したタスクを表示'),
+              child: Text(t.showCompleted),
             ),
           ],
         ],
@@ -1192,7 +1245,7 @@ class _TileStackScreenState extends State<TileStackScreen> {
           Icon(Icons.circle, size: 12, color: levelColors[level]),
           const SizedBox(width: 6),
           Expanded(
-            child: Text('レベル$level（${levelNames[level]}）',
+            child: Text(tr(context).levelSection(level),
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelLarge),
           ),
@@ -1204,15 +1257,16 @@ class _TileStackScreenState extends State<TileStackScreen> {
 
   // タイル右端の「期日まであと何日」バッジ。
   // 目標期日があればそこまで、無ければ実際の期日まで。レベルD等は表示しない。
-  Widget? _deadlineBadge(TaskTile t) {
-    final target = t.targetDeadline;
-    final actual = t.actualDeadline;
+  Widget? _deadlineBadge(TaskTile task) {
+    final t = tr(context);
+    final target = task.targetDeadline;
+    final actual = task.actualDeadline;
     if (target == null && actual == null) return null;
     // 残り日数は「表示中の日付」を基準にする（未来を見れば連動して短くなる）
     final ref = dateOnly(selectedDate ?? todayDate ?? DateTime.now());
     int daysTo(DateTime d) => dateOnly(d).difference(ref).inDays;
 
-    final hasMargin = target != null && actual != null && t.marginDays > 0;
+    final hasMargin = target != null && actual != null && task.marginDays > 0;
     final scheme = Theme.of(context).colorScheme;
     final String label;
     final String daysText;
@@ -1222,37 +1276,37 @@ class _TileStackScreenState extends State<TileStackScreen> {
       final dTarget = daysTo(target);
       final dActual = daysTo(actual);
       if (dTarget > 0) {
-        label = '目標期日まであと';
-        daysText = '$dTarget日';
+        label = t.badgeTargetIn;
+        daysText = t.badgeDays(dTarget);
         color = scheme.onSurfaceVariant;
       } else if (dActual > 0) {
         // 目標期日は過ぎたが、実際の期日まではまだ猶予がある（マージン期間）
         // → 実際の期日を基準に表示する
-        label = '目標期日を超過中';
-        daysText = '実際の期日まで$dActual日';
+        label = t.badgeTargetOverdue;
+        daysText = t.badgeActualIn(dActual);
         color = Colors.orange.shade800;
       } else if (dActual == 0) {
-        label = '目標期日を超過中';
-        daysText = '実際の期日は今日';
+        label = t.badgeTargetOverdue;
+        daysText = t.badgeActualToday;
         color = scheme.error;
       } else {
-        label = '期日超過';
-        daysText = '${-dActual}日超過';
+        label = t.badgeOverdue;
+        daysText = t.badgeOverdueBy(-dActual);
         color = scheme.error;
       }
     } else {
       final d = daysTo((actual ?? target)!);
       if (d > 0) {
-        label = '期日まであと';
-        daysText = '$d日';
+        label = t.badgeDeadlineIn;
+        daysText = t.badgeDays(d);
         color = scheme.onSurfaceVariant;
       } else if (d == 0) {
-        label = '期日';
-        daysText = '今日まで';
+        label = t.badgeDeadline;
+        daysText = t.badgeUntilToday;
         color = Colors.orange.shade800;
       } else {
-        label = '期日';
-        daysText = '${-d}日超過';
+        label = t.badgeDeadline;
+        daysText = t.badgeOverdueBy(-d);
         color = scheme.error;
       }
     }
@@ -1274,41 +1328,44 @@ class _TileStackScreenState extends State<TileStackScreen> {
     );
   }
 
-  Widget _tile(TaskTile t, bool interactive) {
-    final isZombie = t.status == 'zombie';
-    final done = t.todayRemaining == 0 && !isZombie;
-    final badge = _deadlineBadge(t);
+  Widget _tile(TaskTile task, bool interactive) {
+    final t = tr(context);
+    final isZombie = task.status == 'zombie';
+    final done = task.todayRemaining == 0 && !isZombie;
+    final badge = _deadlineBadge(task);
     return Card(
       child: ListTile(
         enabled: interactive, // 今日以外は閲覧のみ（グレー表示）
         onTap: !interactive
             ? null
-            : (done ? () => _confirmUncomplete(t) : () => _oneTapComplete(t)),
-        onLongPress: interactive ? () => _longPressMenu(t) : null,
+            : (done
+                ? () => _confirmUncomplete(task)
+                : () => _oneTapComplete(task)),
+        onLongPress: interactive ? () => _longPressMenu(task) : null,
         leading: Icon(
           done ? Icons.check_circle : Icons.radio_button_unchecked,
-          color: done ? Colors.green : levelColors[t.level],
+          color: done ? Colors.green : levelColors[task.level],
         ),
-        title: Text(t.title),
+        title: Text(task.title),
         subtitle: Text(
           isZombie
               // 罪悪感を煽らない無機質な事実表示（§6-2）
-              ? 'ℹ️ 逆算停止：期日を超過。残 ${t.remainingAmount}${t.unit} を消化してください'
-              : t.inProgressToday
-                  ? '残りノルマ：${t.todayRemaining}${t.unit}'
-                  : 'ノルマ：${t.todayQuota}${t.unit}',
+              ? t.zombieSubtitle(task.remainingAmount, task.unit)
+              : task.inProgressToday
+                  ? t.quotaRemaining(task.todayRemaining, task.unit)
+                  : t.quotaLabel(task.todayQuota, task.unit),
         ),
-        trailing: (badge != null || t.triage.active)
+        trailing: (badge != null || task.triage.active)
             ? Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   ?badge,
-                  if (t.triage.active)
+                  if (task.triage.active)
                     IconButton(
                       icon: const Icon(Icons.warning_amber_rounded,
                           color: Colors.orange),
                       onPressed:
-                          interactive ? () => _showTriageOverlay(t) : null,
+                          interactive ? () => _showTriageOverlay(task) : null,
                     ),
                 ],
               )
@@ -1336,7 +1393,7 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
   final api = ApiClient();
   final _formKey = GlobalKey<FormState>();
   final _title = TextEditingController();
-  final _unit = TextEditingController(text: 'ページ');
+  final _unit = TextEditingController(); // 既定値は言語に応じて後で入れる
   final _total = TextEditingController();
   final _margin = TextEditingController(text: '2');
   final _fixed = TextEditingController();
@@ -1345,13 +1402,8 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
   DateTime? _deadline;
   bool _saving = false;
 
-  static const _levelHints = {
-    'A': '仕事・提出物など、他者が関わる動かせない期日。ギブアップ不可。',
-    'B': '資格勉強など自分で決めた期日。あとから再設定・アーカイブ可能。',
-    'C': '趣味・自己満。日数が足りなくてもノルマは増えず、完了予定日が延びる。',
-    'D': '終わりのない毎日のルーティン。固定量を毎日提示、翌日に繰り越さない。',
-  };
   static const _defaultMargin = {'A': '3', 'B': '2'};
+  bool _unitFilled = false;
 
   bool get _isRoutine => _level == 'D';
   bool get _isEdit => widget.task != null;
@@ -1359,19 +1411,29 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
   @override
   void initState() {
     super.initState();
-    final t = widget.task;
-    if (t == null) return;
+    final task = widget.task;
+    if (task == null) return;
     // 編集モード: 既存の値をフォームに反映する。
-    _title.text = t.title;
-    _unit.text = t.unit;
-    _level = t.level;
-    _workDays = t.workDaysPerWeek;
-    _deadline = t.actualDeadline;
-    _margin.text = t.marginDays.toString();
-    if (t.level == 'D') {
-      _fixed.text = (t.fixedDailyAmount ?? 0).toString();
+    _title.text = task.title;
+    _unit.text = task.unit;
+    _level = task.level;
+    _workDays = task.workDaysPerWeek;
+    _deadline = task.actualDeadline;
+    _margin.text = task.marginDays.toString();
+    if (task.level == 'D') {
+      _fixed.text = (task.fixedDailyAmount ?? 0).toString();
     } else {
-      _total.text = t.totalAmount.toString();
+      _total.text = task.totalAmount.toString();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 新規作成時の単位の既定値は表示言語に合わせる（ページ / pages）
+    if (!_unitFilled && _unit.text.isEmpty) {
+      _unitFilled = true;
+      _unit.text = tr(context).defaultUnit;
     }
   }
 
@@ -1390,20 +1452,22 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
       initialDate: _deadline ?? now.add(const Duration(days: 7)),
       firstDate: now,
       lastDate: now.add(const Duration(days: 365 * 3)),
-      helpText: '実際の期日（最終デッドライン）',
+      helpText: tr(context).formDeadlineHelp,
     );
     if (d != null) setState(() => _deadline = d);
   }
 
   Future<void> _save() async {
+    final t = tr(context);
     if (!_formKey.currentState!.validate()) return;
     if (!_isRoutine && _deadline == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('期日を選択してください')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(t.formNeedDeadline)));
       return;
     }
     setState(() => _saving = true);
-    final unit = _unit.text.trim().isEmpty ? 'ページ' : _unit.text.trim();
+    final unit =
+        _unit.text.trim().isEmpty ? t.defaultUnit : _unit.text.trim();
     final body = <String, dynamic>{
       'title': _title.text.trim(),
       'level': _level,
@@ -1429,8 +1493,8 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
     } catch (_) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('保存に失敗しました。通信環境を確認してください。')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(t.formSaveFailed)));
       }
       return;
     }
@@ -1439,8 +1503,12 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = tr(context);
     return Scaffold(
-      appBar: AppBar(title: Text(_isEdit ? 'タスクを編集' : 'タスクを追加')),
+      appBar: AppBar(
+        title: Text(_isEdit ? t.formEditTitle : t.formAddTitle),
+        actions: const [LanguageButton()],
+      ),
       body: Form(
         key: _formKey,
         child: ListView(
@@ -1449,12 +1517,12 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
             TextFormField(
               controller: _title,
               autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'タイトル',
-                hintText: '例: 提出レポート執筆',
+              decoration: InputDecoration(
+                labelText: t.formTitleLabel,
+                hintText: t.formTitleHint,
               ),
               validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'タイトルを入力してください' : null,
+                  (v == null || v.trim().isEmpty) ? t.formTitleRequired : null,
             ),
             const SizedBox(height: 20),
             SegmentedButton<String>(
@@ -1474,7 +1542,7 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              'レベル$_level（${levelNames[_level]}）\n${_levelHints[_level]}',
+              '${t.levelSection(_level)}\n${t.levelHint(_level)}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 20),
@@ -1483,26 +1551,24 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
                 controller: _fixed,
                 keyboardType: TextInputType.number,
                 decoration: InputDecoration(
-                  labelText: '毎日の固定量',
+                  labelText: t.formFixedLabel,
                   suffixText: _unit.text,
-                  hintText: '例: 20',
+                  hintText: t.formFixedHint,
                 ),
-                validator: (v) => (int.tryParse(v ?? '') ?? 0) <= 0
-                    ? '1以上の数値を入力してください'
-                    : null,
+                validator: (v) =>
+                    (int.tryParse(v ?? '') ?? 0) <= 0 ? t.formMin1 : null,
               )
             else ...[
               TextFormField(
                 controller: _total,
                 keyboardType: TextInputType.number,
                 decoration: InputDecoration(
-                  labelText: '全体量',
+                  labelText: t.formTotalLabel,
                   suffixText: _unit.text,
-                  hintText: '例: 100',
+                  hintText: t.formTotalHint,
                 ),
-                validator: (v) => (int.tryParse(v ?? '') ?? 0) <= 0
-                    ? '1以上の数値を入力してください'
-                    : null,
+                validator: (v) =>
+                    (int.tryParse(v ?? '') ?? 0) <= 0 ? t.formMin1 : null,
               ),
               const SizedBox(height: 12),
               ListTile(
@@ -1510,8 +1576,8 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
                 leading: const Icon(Icons.event),
                 title: Text(
                   _deadline == null
-                      ? '実際の期日を選択'
-                      : '実際の期日: ${_deadline!.year}/${_deadline!.month}/${_deadline!.day}',
+                      ? t.formPickDeadline
+                      : t.formDeadlineSet(_deadline!),
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: _pickDeadline,
@@ -1520,24 +1586,24 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
                 TextFormField(
                   controller: _margin,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'マージン（バッファ日数）',
-                    helperText: '目標期日 = 実際の期日 − マージン。ノルマはこちらで逆算',
+                  decoration: InputDecoration(
+                    labelText: t.formMarginLabel,
+                    helperText: t.formMarginHelper,
                   ),
                   validator: (v) =>
-                      (int.tryParse(v ?? '') ?? -1) < 0 ? '0以上の数値' : null,
+                      (int.tryParse(v ?? '') ?? -1) < 0 ? t.formMargin0 : null,
                 ),
                 const SizedBox(height: 12),
               ],
               DropdownButtonFormField<int>(
                 initialValue: _workDays,
-                decoration: const InputDecoration(
-                  labelText: '週の稼働日数',
-                  helperText: '7未満にすると差分が「休日の権利」になる（曜日は固定しない）',
+                decoration: InputDecoration(
+                  labelText: t.formWorkDaysLabel,
+                  helperText: t.formWorkDaysHelper,
                 ),
                 items: [
                   for (var d = 1; d <= 7; d++)
-                    DropdownMenuItem(value: d, child: Text('週$d日')),
+                    DropdownMenuItem(value: d, child: Text(t.formWeekDays(d))),
                 ],
                 onChanged: (v) => setState(() => _workDays = v ?? 7),
               ),
@@ -1545,9 +1611,9 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _unit,
-              decoration: const InputDecoration(
-                labelText: '単位',
-                hintText: 'ページ / 問 / 回 など',
+              decoration: InputDecoration(
+                labelText: t.formUnitLabel,
+                hintText: t.formUnitHint,
               ),
               onChanged: (_) => setState(() {}), // suffixText更新
             ),
@@ -1556,7 +1622,7 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
               key: const Key('save_task'),
               onPressed: _saving ? null : _save,
               icon: const Icon(Icons.check),
-              label: Text(_isEdit ? '保存する' : 'タスクを追加'),
+              label: Text(_isEdit ? t.formSave : t.formAdd),
             ),
           ],
         ),
@@ -1759,7 +1825,7 @@ class _MockData {
 
   // トリアージ選択の適用。実バックエンドでは選択に応じて再計算されるが、
   // モックでは「解決済み＝トリアージ解除」の状態遷移だけを再現する。
-  static String? applyTriage(int id, String choice) {
+  static ApiError? applyTriage(int id, String choice) {
     final t = _raw.firstWhere((x) => x['id'] == id);
     switch (choice) {
       case 'consume_margin':

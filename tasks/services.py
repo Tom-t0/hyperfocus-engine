@@ -14,6 +14,17 @@ from .progress import ProgressLog  # 分離した実績ログ
 TRIAGE_THRESHOLD = 1.5  # 標準ペースの1.5倍でトリアージ発動（§6-1）
 MAX_CATCHUP_DAYS = 400  # 日次リセットをまとめて精算する上限（暴走防止）
 
+# 「本当に決めたのか」を問う入力。日本語/英語のどちらでも受け付ける（§6-2）
+FRICTION_PHRASES = ("関係者と合意済み", "Agreed with stakeholders")
+
+
+class TriageError(ValueError):
+    """トリアージ操作の失敗。code はフロント側の翻訳キー。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
 
 # ---------------------------------------------------------------------------
 # 消化操作（§3）
@@ -133,12 +144,12 @@ def apply_triage_choice(
     """トリアージ画面での選択を適用する。"""
     if choice == "consume_margin":
         if task.margin_days <= 0:
-            raise ValueError("マージンは既にゼロです")  # グレーアウト項目の防御
+            raise TriageError("margin_zero", "マージンは既にゼロです")  # グレーアウト項目の防御
         task.margin_days -= 1  # 目標期日を1日後ろ倒し
 
     elif choice == "forfeit_rest":
         if task.rest_days_remaining <= 0:
-            raise ValueError("休日の権利は既にゼロです")
+            raise TriageError("rest_zero", "休日の権利は既にゼロです")
         task.rest_days_remaining = 0  # 休日の権利を消滅させ稼働日を増やす
 
     elif choice == "force_through":
@@ -148,24 +159,26 @@ def apply_triage_choice(
     elif choice == "reset_deadline_with_friction":
         # レベルA: 「関係者と合意済み」の入力を意図的な決断コストとする（§6-2）
         if task.level != Level.A:
-            raise ValueError("このオプションはレベルA専用です")
-        if friction_text != "関係者と合意済み":
-            raise ValueError("「関係者と合意済み」と入力してください")
+            raise TriageError("level_a_only", "このオプションはレベルA専用です")
+        if (friction_text or "").strip() not in FRICTION_PHRASES:
+            raise TriageError(
+                "friction_mismatch", "「関係者と合意済み」と入力してください"
+            )
         _reset_deadline(task, new_deadline, today)
 
     elif choice == "reset_deadline":
         if task.level != Level.B:
-            raise ValueError("このオプションはレベルB専用です")
+            raise TriageError("level_b_only", "このオプションはレベルB専用です")
         _reset_deadline(task, new_deadline, today)
 
     elif choice == "archive":
         # レベルAの安易なギブアップは許可しない（§5）
         if task.level == Level.A:
-            raise ValueError("レベルAタスクはアーカイブできません")
+            raise TriageError("level_a_no_archive", "レベルAタスクはアーカイブできません")
         task.status = TaskStatus.ARCHIVED
 
     else:
-        raise ValueError(f"不明な選択肢: {choice}")
+        raise TriageError("unknown_choice", f"不明な選択肢: {choice}")
 
     task.save()
     return task
@@ -173,7 +186,9 @@ def apply_triage_choice(
 
 def _reset_deadline(task: Task, new_deadline: date | None, today: date):
     if new_deadline is None or new_deadline <= today:
-        raise ValueError("新しい期日（明日以降）を指定してください")
+        raise TriageError(
+            "deadline_future_required", "新しい期日（明日以降）を指定してください"
+        )
     task.actual_deadline = new_deadline
     task.status = TaskStatus.ACTIVE  # ゾンビからの復帰も可能
     task.initialize_pace(today)  # 計算ロジックを再始動

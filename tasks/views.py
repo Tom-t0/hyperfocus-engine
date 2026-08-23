@@ -39,7 +39,9 @@ def _get_task(request, task_id: int) -> Task | None:
 
 
 def _not_found() -> JsonResponse:
-    return JsonResponse({"error": "タスクが見つかりません"}, status=404)
+    return JsonResponse(
+        {"error": "タスクが見つかりません", "code": "task_not_found"}, status=404
+    )
 
 
 def _effective_start(task: Task) -> date:
@@ -248,7 +250,10 @@ def triage(request, task_id: int):
                 friction_text=body.get("friction_text"),
             )
         except ValueError as e:
-            return JsonResponse({"error": str(e)}, status=400)
+            # code はフロント側の翻訳キー（TriageError が持つ）
+            return JsonResponse(
+                {"error": str(e), "code": getattr(e, "code", None)}, status=400
+            )
 
     return JsonResponse(_task_payload(task, today))
 

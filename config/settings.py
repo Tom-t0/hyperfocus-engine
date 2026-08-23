@@ -55,6 +55,8 @@ MIDDLEWARE = [
     "whitenoise.middleware.WhiteNoiseMiddleware",
     # CORSはCommonMiddlewareより前に置く必要がある（別オリジン配信する場合用）
     "corsheaders.middleware.CorsMiddleware",
+    # Accept-Language に応じてDjango標準のメッセージ（パスワード検証など）を翻訳
+    "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     # トークン認証（/api/ はログイン必須。/api/auth/ は除外）
@@ -87,6 +89,14 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 USE_TZ = True
 TIME_ZONE = "Asia/Tokyo"
+
+# --- 多言語（日本語 / 英語）-----------------------------------------------
+# アプリ独自の文言はフロント側で翻訳する（APIは翻訳キー"code"を返す）。
+# ここで効くのはDjango標準のメッセージ（パスワード検証など）で、
+# クライアントが送る Accept-Language ヘッダに従う。
+USE_I18N = True
+LANGUAGE_CODE = "en-us"
+LANGUAGES = [("en", "English"), ("ja", "Japanese")]
 
 # --- データベース ---------------------------------------------------------
 # 優先順位: DATABASE_URL（多くのPaaS/Neon等） > POSTGRES_* > SQLite（開発用）
